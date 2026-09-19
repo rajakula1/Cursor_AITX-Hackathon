@@ -42,7 +42,8 @@ values
       {"id":"c3","text":"Negative TB screening within past 12 months","weight":1.0},
       {"id":"c4","text":"Prescribed by or in consultation with a rheumatologist","weight":0.8}
     ]'::jsonb,
-    0.72
+    -- 0.40 so Fixture C likelihood lands ~0.3–0.5 and triggers alternative (<0.55)
+    0.40
   ),
   (
     'UnitedHealthcare', 'adalimumab', 'TNF inhibitor', 'L40.0', true,

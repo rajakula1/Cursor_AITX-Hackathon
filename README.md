@@ -9,7 +9,7 @@ Hackathon build of a LangGraph prior-auth intake pipeline (spec: `PA-Intake-hack
 - Python 3.12+ (local venv uses 3.13 if 3.12 is unavailable)
 - LangGraph + OpenRouter (`OPENROUTER_API_KEY` only — no Anthropic SDK)
 - Supabase schema in `sql/` (in-memory seed store for early blocks)
-- Streamlit UI (later block)
+- Streamlit UI (`streamlit run app.py`)
 
 ## Blocks
 
@@ -18,11 +18,11 @@ Hackathon build of a LangGraph prior-auth intake pipeline (spec: `PA-Intake-hack
 | 1 Setup + fixtures | done |
 | 2 Graph skeleton | done |
 | 3 Extraction + quote verify | done |
-| 4 Critic | **done** |
-| 5 Draft + score + alternative | next |
-| 6 Gate + persistence | |
-| 7 UI | |
-| 8 Break-it + demo | |
+| 4 Critic | done |
+| 5 Draft + score + alternative | done |
+| 6 Gate + persistence | done |
+| 7 UI | done |
+| 8 Break-it + demo | **done** |
 
 ## Setup
 
@@ -67,6 +67,47 @@ pytest tests/test_block3_extract_quote.py -q
 pytest tests/test_block4_critic.py -q
 # critic_note per field; cannot raise failed quote-verify; downgrade can flip gate
 ```
+
+## Block 5 checks
+
+```bash
+pytest tests/test_block5_draft_score.py -q
+# Fixture B → draft + likelihood ≥ 0.75; Fixture C → alt etanercept, likelihood ~0.3–0.5
+```
+
+## Block 6 checks
+
+```bash
+pytest tests/test_block6_gate_persist.py -q
+python scripts/run_golden.py
+# gate escalates fields; pa_cases upsert; export markdown paste-ready
+```
+
+## Block 7 — UI
+
+```bash
+streamlit run app.py
+```
+
+Sidebar loads golden fixtures (start demo with **fixture_c**). Met fields are read-only; unmet fields are editable; **Re-score** re-runs likelihood + gate without re-extracting.
+
+## Block 8 — Break-it + demo
+
+```bash
+pytest tests/test_block8_breakit.py -q
+python scripts/breakit.py
+python scripts/demo.py --talk          # C → A → B + 90s talk track
+```
+
+Break-it covers empty note, unknown drug/payer, hallucinated quote — always `needs_review` / safe status, never crash.
+
+### 90-second talk track
+
+1. Escalate **fields**, not cases — Fixture C checklist  
+2. Model cannot invent evidence — failed quote → confidence 0 in code  
+3. Second model critiques, then **math** scores approval  
+4. Likely deny → same-class **no-PA** alternative  
+5. Paste the markdown. Stop talking.
 
 ## Golden fixtures
 

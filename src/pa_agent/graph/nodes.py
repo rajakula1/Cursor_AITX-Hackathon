@@ -195,24 +195,36 @@ def critic_node(state: PAState) -> dict[str, Any]:
 
 
 def pa_draft_builder_node(state: PAState) -> dict[str, Any]:
-    """Stub (Block 2). Typed PAForm draft in Block 5."""
+    """Fill typed PAForm from critic-adjusted fields; narrative = verified quotes only."""
     try:
-        return {"draft_pa_form": state.get("draft_pa_form")}
+        import asyncio
+
+        from pa_agent.tools.draft import build_pa_form
+
+        form = asyncio.run(build_pa_form(state))
+        return {"draft_pa_form": form, "missing_fields": list(form.get("missing_fields") or [])}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "pa_draft_builder_node", exc)
 
 
 def approval_likelihood_node(state: PAState) -> dict[str, Any]:
-    """Stub (Block 2). Deterministic formula in Block 5."""
+    """Deterministic likelihood (spec §2.4); shares `met` with the gate."""
     try:
-        # Leave None so alternative routing stays off until scoring exists
-        return {"approval_likelihood": state.get("approval_likelihood")}
+        from pa_agent.criteria import compute_approval_likelihood
+
+        score = compute_approval_likelihood(
+            policy_criteria=list(state.get("policy_criteria") or []),
+            extractions=list(state.get("extractions") or []),
+            historical_approval_rate=state.get("historical_approval_rate"),
+            blend_historical=True,
+        )
+        return {"approval_likelihood": score}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "approval_likelihood_node", exc)
 
 
 def alternative_suggestion_node(state: PAState) -> dict[str, Any]:
-    """Stub-capable: real formulary lookup when likelihood < 0.55."""
+    """Formulary alternative when likelihood < 0.55; prefer requires_pa=false."""
     try:
         drug_class = state.get("drug_class")
         payer = state.get("payer_name")
@@ -225,128 +237,86 @@ def alternative_suggestion_node(state: PAState) -> dict[str, Any]:
             return {
                 "alternative_suggestion": "No same-class alternative found in formulary."
             }
-        return {"alternative_suggestion": alt["alternative_drug"]}
+        label = alt["alternative_drug"]
+        if not alt.get("requires_pa"):
+            label = f"{label} (no PA required)"
+        return {"alternative_suggestion": label}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "alternative_suggestion_node", exc)
 
 
 def confidence_gate_node(state: PAState) -> dict[str, Any]:
-    """Deterministic gate using shared `is_criterion_met` (spec §2.4)."""
+    """Deterministic gate using shared `is_criterion_met` via evaluate_confidence_gate."""
     try:
-        criteria = state.get("policy_criteria") or []
-        extractions = state.get("extractions") or []
-        by_id = {e.get("criterion_id"): e for e in extractions}
+        from pa_agent.gate import evaluate_confidence_gate
 
-        missing: list[str] = []
-        refreshed: list[CriterionResult] = []
-        for c in criteria:
-            cid = c["id"]
-            ext = by_id.get(cid)
-            if not ext:
-                missing.append(cid)
-                continue
-            row: CriterionResult = dict(ext)  # type: ignore[assignment]
-            row["met"] = is_criterion_met(
-                value=row.get("value"),
-                quote_verified=bool(row.get("quote_verified")),
-                confidence=float(row.get("confidence") or 0.0),
-            )
-            refreshed.append(row)
-            if not row["met"]:
-                missing.append(cid)
-
-        # Keep any extractions not in policy_criteria (shouldn't happen)
-        seen = {r["criterion_id"] for r in refreshed}
-        for ext in extractions:
-            if ext.get("criterion_id") not in seen:
-                refreshed.append(dict(ext))  # type: ignore[arg-type]
-
-        if criteria and not missing:
-            status = "auto_completed"
-            notes = None
-        else:
-            status = "needs_review"
-            notes = (
-                "Unmet criteria: " + ", ".join(missing)
-                if missing
-                else "No policy criteria evaluated."
-            )
-
-        return {
-            "extractions": refreshed,
-            "missing_fields": missing,
-            "status": status,
-            "human_review_notes": notes or state.get("human_review_notes"),
-        }
+        return evaluate_confidence_gate(
+            policy_criteria=list(state.get("policy_criteria") or []),
+            extractions=list(state.get("extractions") or []),  # type: ignore[arg-type]
+            prior_notes=state.get("human_review_notes"),
+        )
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "confidence_gate_node", exc)
 
 
 def finalize_node(state: PAState) -> dict[str, Any]:
-    """Upsert case, emit export_markdown, never throw to UI."""
+    """Upsert pa_cases, emit paste-ready export_markdown, escalate fields not cases."""
     try:
+        from pa_agent.tools.draft import build_export_markdown
+
         status = state.get("status") or "needs_review"
-        # Public status is never "error"
         if status not in ("no_pa_required", "auto_completed", "needs_review"):
             status = "needs_review"
 
-        draft = state.get("draft_pa_form")
-        export = ""
-        if draft and isinstance(draft, dict) and draft.get("export_markdown"):
-            export = str(draft["export_markdown"])
-        else:
-            export = _build_export_markdown(state, status)
+        missing = list(state.get("missing_fields") or [])
+        notes = state.get("human_review_notes")
+        # Escalation copy for review path when gate didn't already write one
+        if status == "needs_review" and missing and not notes:
+            notes = "Escalate fields: " + ", ".join(missing)
 
-        draft_out = dict(draft) if isinstance(draft, dict) else {
-            "drug_name": state.get("drug_name") or "",
-            "diagnosis_code": state.get("diagnosis_code") or "",
-            "payer_name": state.get("payer_name") or "",
-            "clinical_justification": "",
-            "criteria_checklist": [],
-            "quantity": None,
-            "duration": None,
-            "missing_fields": list(state.get("missing_fields") or []),
-            "export_markdown": export,
-        }
-        draft_out["export_markdown"] = export
-        draft_out["missing_fields"] = list(state.get("missing_fields") or [])
+        draft = state.get("draft_pa_form")
+        if isinstance(draft, dict):
+            draft_out = dict(draft)
+        else:
+            draft_out = {
+                "drug_name": state.get("drug_name") or "",
+                "diagnosis_code": state.get("diagnosis_code") or "",
+                "payer_name": state.get("payer_name") or "",
+                "clinical_justification": (
+                    "Prior authorization is not required."
+                    if status == "no_pa_required"
+                    else ""
+                ),
+                "criteria_checklist": [],
+                "quantity": None,
+                "duration": None,
+                "missing_fields": missing,
+                "export_markdown": "",
+            }
+
+        draft_out["missing_fields"] = missing
+        draft_out["export_markdown"] = build_export_markdown(
+            draft_out,  # type: ignore[arg-type]
+            status=status,
+            case_id=state.get("case_id"),
+            approval_likelihood=state.get("approval_likelihood"),
+            alternative_suggestion=state.get("alternative_suggestion"),
+            human_review_notes=notes,
+        )
 
         updates: dict[str, Any] = {
             "status": status,
+            "missing_fields": missing,
+            "human_review_notes": notes,
             "draft_pa_form": draft_out,
         }
+        # Full upsert of merged state
         save_case({**state, **updates})
         return updates
     except Exception as exc:  # noqa: BLE001
-        # Last resort: still try to surface needs_review
         fallback = append_error(state, "finalize_node", exc)
         try:
             save_case({**state, **fallback})
         except Exception:  # noqa: BLE001
             pass
         return fallback
-
-
-def _build_export_markdown(state: PAState, status: str) -> str:
-    lines = [
-        "# Prior Authorization Draft",
-        "",
-        "> Demo data — not real PHI.",
-        "",
-        f"- **Status:** {status}",
-        f"- **Case ID:** {state.get('case_id') or ''}",
-        f"- **Drug:** {state.get('drug_name') or ''}",
-        f"- **Diagnosis:** {state.get('diagnosis_code') or ''}",
-        f"- **Payer:** {state.get('payer_name') or ''}",
-    ]
-    if state.get("approval_likelihood") is not None:
-        lines.append(f"- **Approval likelihood:** {state['approval_likelihood']:.2f}")
-    if state.get("alternative_suggestion"):
-        lines.append(f"- **Alternative:** {state['alternative_suggestion']}")
-    if state.get("human_review_notes"):
-        lines.extend(["", "## Review notes", state["human_review_notes"] or ""])
-    missing = state.get("missing_fields") or []
-    if missing:
-        lines.extend(["", "## Fields needing review", ", ".join(missing)])
-    lines.append("")
-    return "\n".join(lines)

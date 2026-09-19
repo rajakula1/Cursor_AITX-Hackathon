@@ -69,7 +69,7 @@ PAYER_POLICIES: list[dict[str, Any]] = [
         "diagnosis_code": "M06.9",
         "requires_pa": True,
         "criteria": UHC_ADA_RA_CRITERIA,
-        "historical_approval_rate": 0.72,
+        "historical_approval_rate": 0.40,
     },
     {
         "payer_name": "UnitedHealthcare",

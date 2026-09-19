@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pa_agent.criteria import ALTERNATIVE_LIKELIHOOD_THRESHOLD
 from pa_agent.state import PAState
 
 AfterCoverage = Literal["finalize", "justification_extraction"]
@@ -33,6 +34,6 @@ def route_after_coverage(state: PAState) -> AfterCoverage:
 
 def route_after_likelihood(state: PAState) -> AfterLikelihood:
     likelihood = state.get("approval_likelihood")
-    if likelihood is not None and likelihood < 0.55:
+    if likelihood is not None and likelihood < ALTERNATIVE_LIKELIHOOD_THRESHOLD:
         return "alternative_suggestion"
     return "confidence_gate"
