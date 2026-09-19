@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from pa_agent.criteria import is_criterion_met, quote_in_note
+from pa_agent.data.repository import resolve_drug, resolve_payer
 from pa_agent.graph.helpers import append_error, run_async
 from pa_agent.state import CriterionResult, PAState
 from pa_agent.tools.extract import extract_all
@@ -15,7 +16,7 @@ from pa_agent.tools.save_case import save_case
 
 
 def intake_node(state: PAState) -> dict[str, Any]:
-    """Validate inputs, generate case_id, normalize aliases, upsert case."""
+    """Validate inputs, generate case_id, normalize aliases, local upsert only."""
     try:
         errors: list[str] = []
         drug = (state.get("drug_name") or "").strip()
@@ -34,17 +35,17 @@ def intake_node(state: PAState) -> dict[str, Any]:
 
         case_id = (state.get("case_id") or "").strip() or str(uuid.uuid4())
 
-        # Alias resolution (canonical names applied when resolvable)
-        policy_preview = get_payer_policy(drug or "?", diagnosis or "?", payer or "?")
-        canonical_drug = policy_preview.get("canonical_drug") or drug
-        canonical_payer = policy_preview.get("canonical_payer") or payer
-        drug_class = policy_preview.get("drug_class")
+        # Alias-only resolve here — full policy lookup happens once in coverage_check
+        drug_row = resolve_drug(drug) if drug else None
+        canonical_drug = (drug_row or {}).get("canonical_drug") or drug
+        canonical_payer = resolve_payer(payer) if payer else None
+        drug_class = (drug_row or {}).get("drug_class")
 
         updates: dict[str, Any] = {
             "case_id": case_id,
             "drug_name": canonical_drug,
             "diagnosis_code": diagnosis,
-            "payer_name": canonical_payer,
+            "payer_name": canonical_payer or payer,
             "clinical_note": note,
             "drug_class": drug_class,
             "error_log": list(state.get("error_log") or []),
@@ -55,19 +56,22 @@ def intake_node(state: PAState) -> dict[str, Any]:
             updates["status"] = "needs_review"
             updates["human_review_notes"] = reason
             updates["error_log"] = updates["error_log"] + [reason]
-            save_case({**state, **updates})
+            # Memory only — avoid remote round-trip before early finalize
+            save_case({**state, **updates}, remote=False)
             return updates
 
-        # Unresolvable aliases → needs_review (coverage will also see not_found)
-        if policy_preview["lookup"] == "not_found" and (
-            "Unresolvable" in (policy_preview.get("reason") or "")
-        ):
-            reason = policy_preview["reason"] or "Unresolvable alias"
+        if drug and not drug_row:
+            reason = f"Unresolvable drug alias: {drug!r}"
+            updates["status"] = "needs_review"
+            updates["human_review_notes"] = reason
+            updates["policy_lookup"] = "not_found"
+        elif payer and not canonical_payer:
+            reason = f"Unresolvable payer alias: {payer!r}"
             updates["status"] = "needs_review"
             updates["human_review_notes"] = reason
             updates["policy_lookup"] = "not_found"
 
-        save_case({**state, **updates})
+        save_case({**state, **updates}, remote=False)
         return updates
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "intake_node", exc)

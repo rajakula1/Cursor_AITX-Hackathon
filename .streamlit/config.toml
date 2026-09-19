@@ -1,0 +1,37 @@
+[theme]
+base = "light"
+primaryColor = "#0f766e"
+backgroundColor = "#f8fafc"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#0f172a"
+linkColor = "#0f766e"
+borderColor = "#e2e8f0"
+dataframeBorderColor = "#e2e8f0"
+dataframeHeaderBackgroundColor = "#f1f5f9"
+codeBackgroundColor = "#f1f5f9"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "0.5rem"
+buttonRadius = "0.5rem"
+font = "'Source Sans 3':https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap"
+headingFont = "'Source Serif 4':https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+headingFontSizes = ["1.75rem", "1.35rem", "1.15rem"]
+baseFontSize = 15
+greenColor = "#15803d"
+blueColor = "#1d4ed8"
+orangeColor = "#c2410c"
+redColor = "#b91c1c"
+grayColor = "#64748b"
+
+[theme.sidebar]
+backgroundColor = "#f1f5f9"
+secondaryBackgroundColor = "#ffffff"
+borderColor = "#e2e8f0"
+primaryColor = "#0f766e"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

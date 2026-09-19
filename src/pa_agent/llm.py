@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 
 from langchain_openai import ChatOpenAI
 
@@ -30,11 +31,13 @@ def _base_kwargs(model: str) -> dict:
     }
 
 
+@lru_cache(maxsize=4)
 def get_extract_llm() -> ChatOpenAI:
     settings = get_settings()
     return ChatOpenAI(**_base_kwargs(settings.extract_model))
 
 
+@lru_cache(maxsize=4)
 def get_critic_llm() -> ChatOpenAI:
     settings = get_settings()
     return ChatOpenAI(**_base_kwargs(settings.critic_model))
@@ -49,5 +52,13 @@ def structured(llm: ChatOpenAI, schema):
     try:
         return llm.with_structured_output(schema, method="json_schema")
     except (NotImplementedError, ValueError, TypeError) as exc:
-        _log.warning("json_schema structured output unavailable (%s); falling back", type(exc).__name__)
+        _log.warning(
+            "json_schema structured output unavailable (%s); falling back",
+            type(exc).__name__,
+        )
         return llm.with_structured_output(schema)
+
+
+def clear_llm_client_cache() -> None:
+    get_extract_llm.cache_clear()
+    get_critic_llm.cache_clear()

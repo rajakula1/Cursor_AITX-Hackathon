@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-from typing import Any
+import logging
+import time
+from functools import lru_cache, wraps
+from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
 
+from pa_agent.config import get_settings
 from pa_agent.graph.helpers import make_initial_state
 from pa_agent.graph.nodes import (
     alternative_suggestion_node,
@@ -23,20 +26,44 @@ from pa_agent.graph.nodes import (
 from pa_agent.graph.routing import route_after_coverage, route_after_likelihood
 from pa_agent.state import PAState
 
+_log = logging.getLogger("pa_agent.latency")
+
+
+def _timed(name: str, fn: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    @wraps(fn)
+    def _wrap(state: PAState) -> dict[str, Any]:
+        if not get_settings().latency_log:
+            return fn(state)
+        t0 = time.perf_counter()
+        out = fn(state)
+        ms = (time.perf_counter() - t0) * 1000
+        _log.info("node %-28s %7.0f ms", name, ms)
+        return out
+
+    return _wrap
+
 
 def build_graph():
     g: StateGraph = StateGraph(PAState)
 
-    g.add_node("intake", intake_node)
-    g.add_node("coverage_check", coverage_check_node)
-    g.add_node("justification_extraction", justification_extraction_node)
-    g.add_node("quote_verify", quote_verify_node)
-    g.add_node("critic", critic_node)
-    g.add_node("pa_draft_builder", pa_draft_builder_node)
-    g.add_node("approval_likelihood", approval_likelihood_node)
-    g.add_node("alternative_suggestion", alternative_suggestion_node)
-    g.add_node("confidence_gate", confidence_gate_node)
-    g.add_node("finalize", finalize_node)
+    g.add_node("intake", _timed("intake", intake_node))
+    g.add_node("coverage_check", _timed("coverage_check", coverage_check_node))
+    g.add_node(
+        "justification_extraction",
+        _timed("justification_extraction", justification_extraction_node),
+    )
+    g.add_node("quote_verify", _timed("quote_verify", quote_verify_node))
+    g.add_node("critic", _timed("critic", critic_node))
+    g.add_node("pa_draft_builder", _timed("pa_draft_builder", pa_draft_builder_node))
+    g.add_node(
+        "approval_likelihood", _timed("approval_likelihood", approval_likelihood_node)
+    )
+    g.add_node(
+        "alternative_suggestion",
+        _timed("alternative_suggestion", alternative_suggestion_node),
+    )
+    g.add_node("confidence_gate", _timed("confidence_gate", confidence_gate_node))
+    g.add_node("finalize", _timed("finalize", finalize_node))
 
     g.add_edge(START, "intake")
     g.add_edge("intake", "coverage_check")
@@ -87,4 +114,8 @@ def run_case(
         payer_name=payer_name,
         clinical_note=clinical_note,
     )
-    return graph.invoke(initial)
+    t0 = time.perf_counter()
+    result = graph.invoke(initial)
+    if get_settings().latency_log:
+        _log.info("run_case total %7.0f ms", (time.perf_counter() - t0) * 1000)
+    return result

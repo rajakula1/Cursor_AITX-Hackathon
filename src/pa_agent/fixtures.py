@@ -34,20 +34,21 @@ def list_fixtures() -> list[Path]:
 
 
 def apply_fixture_mocks(fixture: dict[str, Any], *, force: bool = False) -> None:
-    """Install mock extract (+ optional critic) outputs; clear LLM cache.
+    """Install mock extract (+ optional critic) outputs.
 
-    In live mode (USE_MOCK_EXTRACT=0), skips full mocks unless force=True.
+    In live mode (USE_MOCK_EXTRACT=0), skips full mocks unless force=True and
+    does **not** clear the Haiku extract cache (re-runs stay fast).
     Fixture C still injects only the hallucinated c3 quote when
     INJECT_FIXTURE_C_HALLUCINATION=1 (default off) so talk-track #2 stays optional.
     """
     from pa_agent.tools.extract import clear_live_overrides, set_live_overrides
 
-    clear_extract_cache()
     clear_mock_critic()
     clear_live_overrides()
     settings = get_settings()
 
     if settings.use_mock_llm or force:
+        clear_extract_cache()
         raw = fixture.get("mock_extractions") or {}
         mapping: dict[str, ExtractionOut] = {}
         for cid, payload in raw.items():

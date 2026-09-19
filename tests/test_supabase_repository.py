@@ -12,6 +12,7 @@ from pa_agent.tools.save_case import get_saved_case, save_case
 
 def setup_function():
     clear_client_cache()
+    repository.clear_reference_cache()
     from pa_agent.data.seed_store import clear_cases
 
     clear_cases()
@@ -30,41 +31,53 @@ def test_policy_falls_back_to_memory():
     assert len(result["criteria"]) == 4
 
 
-def test_resolve_payer_prefers_supabase_when_configured():
+def test_warm_cache_loads_from_supabase_when_configured():
     mock_client = MagicMock()
-    mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
-        data=[{"canonical_payer": "UnitedHealthcare"}]
-    )
+
+    def _table(name: str):
+        t = MagicMock()
+        if name == "payer_aliases":
+            t.select.return_value.execute.return_value = MagicMock(
+                data=[{"alias": "uhc", "canonical_payer": "UnitedHealthcare"}]
+            )
+        elif name == "drug_aliases":
+            t.select.return_value.execute.return_value = MagicMock(
+                data=[
+                    {
+                        "alias": "humira",
+                        "canonical_drug": "adalimumab",
+                        "drug_class": "TNF inhibitor",
+                    }
+                ]
+            )
+        elif name == "payer_policies":
+            t.select.return_value.execute.return_value = MagicMock(
+                data=[
+                    {
+                        "payer_name": "UnitedHealthcare",
+                        "drug_name": "adalimumab",
+                        "drug_class": "TNF inhibitor",
+                        "diagnosis_code": "M06.9",
+                        "requires_pa": True,
+                        "criteria": [{"id": "c1", "text": "RA", "weight": 1.0}],
+                        "historical_approval_rate": "0.40",
+                    }
+                ]
+            )
+        else:
+            t.select.return_value.execute.return_value = MagicMock(data=[])
+        return t
+
+    mock_client.table.side_effect = _table
     with (
         patch("pa_agent.data.repository.is_configured", return_value=True),
         patch("pa_agent.data.repository.get_client", return_value=mock_client),
     ):
+        source = repository.warm_reference_cache(force=True)
+        assert source == "supabase"
         assert repository.resolve_payer("uhc") == "UnitedHealthcare"
-    mock_client.table.assert_called_with("payer_aliases")
-
-
-def test_find_policy_supabase_row():
-    mock_client = MagicMock()
-    mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
-        data=[
-            {
-                "payer_name": "UnitedHealthcare",
-                "drug_name": "adalimumab",
-                "drug_class": "TNF inhibitor",
-                "diagnosis_code": "M06.9",
-                "requires_pa": True,
-                "criteria": [{"id": "c1", "text": "RA", "weight": 1.0}],
-                "historical_approval_rate": "0.40",
-            }
-        ]
-    )
-    with (
-        patch("pa_agent.data.repository.is_configured", return_value=True),
-        patch("pa_agent.data.repository.get_client", return_value=mock_client),
-    ):
         row = repository.find_policy("adalimumab", "M06.9", "UnitedHealthcare")
     assert row is not None
-    assert row["requires_pa"] is True
     assert row["historical_approval_rate"] == 0.4
 
 
@@ -90,6 +103,22 @@ def test_save_case_upserts_supabase_when_configured():
     assert len(upserted) == 1
     assert upserted[0]["case_id"] == saved["case_id"]
     assert get_saved_case(saved["case_id"]) is not None
+
+
+def test_save_case_remote_false_skips_supabase():
+    with (
+        patch("pa_agent.tools.save_case.is_configured", return_value=True),
+        patch("pa_agent.tools.save_case.upsert_pa_case") as upsert,
+    ):
+        save_case(
+            {
+                "case_id": "33333333-3333-3333-3333-333333333333",
+                "status": "needs_review",
+                "error_log": [],
+            },
+            remote=False,
+        )
+    upsert.assert_not_called()
 
 
 def test_save_case_soft_fails_supabase_error():

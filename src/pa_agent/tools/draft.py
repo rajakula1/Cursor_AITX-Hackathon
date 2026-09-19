@@ -145,7 +145,7 @@ async def build_pa_form(state: PAState) -> PAForm:
     """
     base = build_pa_form_deterministic(state)
     settings = get_settings()
-    if settings.use_mock_llm:
+    if settings.use_mock_llm or not settings.use_draft_meta_llm:
         return base
     try:
         qty, dur = await _live_qty_duration(state)

@@ -44,6 +44,10 @@ class Settings:
     use_mock_llm: bool = True
     # Demo-only: inject Fixture C hallucinated c3 (default OFF — enable for talk track)
     inject_fixture_c_hallucination: bool = False
+    # Optional third Sonnet call for qty/duration (default OFF — saves ~1–3s)
+    use_draft_meta_llm: bool = False
+    # Log per-node wall times to stderr / Streamlit-friendly logger
+    latency_log: bool = False
 
 
 def get_settings() -> Settings:
@@ -71,6 +75,8 @@ def get_settings() -> Settings:
         inject_fixture_c_hallucination=_env_flag(
             "INJECT_FIXTURE_C_HALLUCINATION", default=False
         ),
+        use_draft_meta_llm=_env_flag("USE_DRAFT_META_LLM", default=False),
+        latency_log=_env_flag("LATENCY_LOG", default=False),
     )
 
 

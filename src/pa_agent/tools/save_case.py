@@ -50,16 +50,20 @@ def to_pa_case_row(state: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def save_case(state: dict[str, Any]) -> dict[str, Any]:
+def save_case(
+    state: dict[str, Any],
+    *,
+    remote: bool = True,
+) -> dict[str, Any]:
+    """Persist case. Set remote=False to skip Supabase (intake mid-flight)."""
     case_id = state.get("case_id")
     if not case_id:
         raise ValueError("save_case requires case_id")
 
     row = to_pa_case_row(state)
-    # Always keep in-memory copy for tests / demo without Supabase
     saved = _save_mem(str(case_id), row)
 
-    if is_configured():
+    if remote and is_configured():
         try:
             payload = {
                 k: v

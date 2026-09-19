@@ -175,9 +175,9 @@ async def _live_critique(
     )
 
     last_exc: Optional[Exception] = None
+    llm = structured(get_critic_llm(), _Batch)
     for _ in range(2):
         try:
-            llm = structured(get_critic_llm(), _Batch)
             # Sync invoke — avoids event-loop conflicts after extract's asyncio.run
             out: _Batch = llm.invoke(prompt)
             return [

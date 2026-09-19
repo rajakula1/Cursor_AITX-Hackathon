@@ -142,9 +142,9 @@ async def _live_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
     )
 
     last_exc: Exception | None = None
+    llm = structured(get_extract_llm(), _Out)
     for _attempt in range(2):  # initial + one retry (spec §7)
         try:
-            llm = structured(get_extract_llm(), _Out)
             # Prefer sync invoke inside the fan-out thread to avoid loop reuse bugs
             out: _Out = await asyncio.to_thread(llm.invoke, prompt)
             return {
