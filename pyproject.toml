@@ -1,0 +1,11 @@
+[project]
+name = "pa-intake-agent"
+version = "0.1.0"
+description = "PA Intake & Auto-Draft Agent — AITX Hackathon"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]

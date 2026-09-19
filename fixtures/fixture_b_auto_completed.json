@@ -1,0 +1,41 @@
+{
+  "id": "fixture_b_auto_completed",
+  "description": "UHC + Humira/adalimumab + M06.9 — all 4 criteria supported with verbatim quotes",
+  "input": {
+    "drug_name": "Humira",
+    "diagnosis_code": "M06.9",
+    "payer_name": "UHC",
+    "clinical_note": "Demo data — not real PHI.\n\nPatient Alex Rivera presents for follow-up of rheumatoid arthritis. Documented diagnosis of rheumatoid arthritis confirmed by rheumatology in 2023 with RF and anti-CCP positivity. The patient had an inadequate response to methotrexate for at least 3 months at 20 mg weekly with persistent synovitis. Quantiferon-TB Gold was negative; negative TB screening within past 12 months is on file. Therapy is prescribed by or in consultation with a rheumatologist, Dr. Sam Patel. Plan: initiate adalimumab 40 mg every other week."
+  },
+  "mock_extractions": {
+    "c1": {
+      "value": "rheumatoid arthritis",
+      "confidence": 0.92,
+      "quote": "Documented diagnosis of rheumatoid arthritis confirmed by rheumatology in 2023 with RF and anti-CCP positivity."
+    },
+    "c2": {
+      "value": "methotrexate failure ≥3 months",
+      "confidence": 0.90,
+      "quote": "The patient had an inadequate response to methotrexate for at least 3 months at 20 mg weekly with persistent synovitis."
+    },
+    "c3": {
+      "value": "TB screen negative",
+      "confidence": 0.88,
+      "quote": "negative TB screening within past 12 months is on file."
+    },
+    "c4": {
+      "value": "rheumatologist involvement",
+      "confidence": 0.91,
+      "quote": "Therapy is prescribed by or in consultation with a rheumatologist, Dr. Sam Patel."
+    }
+  },
+  "expected": {
+    "status": "auto_completed",
+    "pa_required": true,
+    "policy_lookup": "found",
+    "all_quote_verified": true,
+    "missing_fields": [],
+    "approval_likelihood_min": 0.75,
+    "export_markdown_nonempty": true
+  }
+}

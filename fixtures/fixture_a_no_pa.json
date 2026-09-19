@@ -1,0 +1,19 @@
+{
+  "id": "fixture_a_no_pa",
+  "description": "Aetna + semaglutide (Ozempic) + E11.9 — requires_pa=false",
+  "input": {
+    "drug_name": "Ozempic",
+    "diagnosis_code": "E11.9",
+    "payer_name": "Aetna",
+    "clinical_note": "Demo data — not real PHI.\n\nPatient Jordan Lee is established with type 2 diabetes mellitus. Currently on metformin 1000 mg BID with A1C 7.2%. Discussed adding a GLP-1 agonist for glycemic control and weight support. No prior authorization barriers anticipated for this plan."
+  },
+  "expected": {
+    "status": "no_pa_required",
+    "pa_required": false,
+    "policy_lookup": "found",
+    "canonical_drug": "semaglutide",
+    "canonical_payer": "Aetna",
+    "extraction_skipped": true,
+    "likelihood_unused": true
+  }
+}

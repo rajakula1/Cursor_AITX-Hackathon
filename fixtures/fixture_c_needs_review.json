@@ -1,0 +1,44 @@
+{
+  "id": "fixture_c_needs_review",
+  "description": "Lead demo: 2 met, 1 hallucinated quote (span-check fails), 1 truly missing → needs_review + alternative",
+  "input": {
+    "drug_name": "adalimumab",
+    "diagnosis_code": "M06.9",
+    "payer_name": "UnitedHealthcare",
+    "clinical_note": "Demo data — not real PHI.\n\nPatient Casey Morgan has a documented diagnosis of rheumatoid arthritis with morning stiffness and polyarticular synovitis. Records show an inadequate response to methotrexate for at least 3 months despite dose optimization. No recent QuantiFERON or chest imaging results are available in the chart today. Specialist notes are pending; rheumatology consult has been requested but not completed."
+  },
+  "mock_extractions": {
+    "c1": {
+      "value": "rheumatoid arthritis",
+      "confidence": 0.90,
+      "quote": "Patient Casey Morgan has a documented diagnosis of rheumatoid arthritis with morning stiffness and polyarticular synovitis."
+    },
+    "c2": {
+      "value": "methotrexate failure ≥3 months",
+      "confidence": 0.88,
+      "quote": "Records show an inadequate response to methotrexate for at least 3 months despite dose optimization."
+    },
+    "c3": {
+      "value": "TB screen negative",
+      "confidence": 0.85,
+      "quote": "QuantiFERON-TB Gold assay performed last month was negative with no radiographic concerns."
+    },
+    "c4": {
+      "value": null,
+      "confidence": 0.0,
+      "quote": null
+    }
+  },
+  "expected": {
+    "status": "needs_review",
+    "pa_required": true,
+    "policy_lookup": "found",
+    "missing_fields_count": 2,
+    "missing_fields": ["c3", "c4"],
+    "hallucinated_criterion_id": "c3",
+    "quote_verified_c3": false,
+    "alternative_suggestion": "etanercept",
+    "approval_likelihood_min": 0.30,
+    "approval_likelihood_max": 0.50
+  }
+}
