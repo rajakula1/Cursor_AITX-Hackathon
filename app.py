@@ -13,11 +13,12 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from pa_agent.config import get_settings, is_live_llm  # noqa: E402
 from pa_agent.fixtures import apply_fixture_mocks, load_fixture  # noqa: E402
 from pa_agent.graph import run_case  # noqa: E402
 from pa_agent.review import apply_human_edits, rescore_case  # noqa: E402
 from pa_agent.tools.critique import clear_mock_critic  # noqa: E402
-from pa_agent.tools.extract import clear_extract_cache  # noqa: E402
+from pa_agent.tools.extract import clear_extract_cache, clear_live_overrides  # noqa: E402
 
 STATUS_COLORS = {
     "no_pa_required": "#1f6f4a",
@@ -53,18 +54,21 @@ def _load_fixture(name: str) -> None:
 
 
 def _run_pipeline() -> None:
-    # Re-apply fixture mocks if a golden was loaded
+    clear_extract_cache()
+    clear_mock_critic()
+    clear_live_overrides()
+    # Live: apply_fixture_mocks only injects Fixture C hallucination (if enabled)
+    # Mock: full fixture extract maps
     if st.session_state.last_fixture:
         try:
             apply_fixture_mocks(load_fixture(st.session_state.last_fixture))
         except Exception:
             clear_extract_cache()
             clear_mock_critic()
-    else:
-        clear_extract_cache()
-        clear_mock_critic()
+            clear_live_overrides()
 
-    with st.spinner("Running PA agent graph…"):
+    mode = "LIVE OpenRouter" if is_live_llm() else "MOCK (offline)"
+    with st.spinner(f"Running PA agent graph ({mode})…"):
         result = run_case(
             drug_name=st.session_state.drug_name,
             diagnosis_code=st.session_state.diagnosis_code,
@@ -241,6 +245,11 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    if is_live_llm():
+        st.warning(
+            "**LIVE mode:** notes are sent to OpenRouter (third party). "
+            "Use synthetic demo notes only — never real PHI."
+        )
 
     st.title("PA Intake & Auto-Draft Agent")
     st.caption(
@@ -262,7 +271,19 @@ def main() -> None:
                 _load_fixture(fname)
                 st.rerun()
         st.divider()
-        st.caption("Mock extract/critic stay on (`USE_MOCK_EXTRACT=1`) for offline demo.")
+        settings = get_settings()
+        if is_live_llm():
+            st.success("Mode: **LIVE** OpenRouter")
+            st.caption(
+                f"Haiku `{settings.extract_model}` · Sonnet `{settings.critic_model}`"
+            )
+        else:
+            st.warning("Mode: **MOCK** (`USE_MOCK_EXTRACT=1`)")
+            st.caption("Set `USE_MOCK_EXTRACT=0` + real key in `.env` for live calls.")
+        st.caption(
+            "Talk-track #2: set `INJECT_FIXTURE_C_HALLUCINATION=1` in `.env` "
+            "to force Fixture C's fake c3 quote (default off)."
+        )
         if st.button("Run break-it empty note", use_container_width=True):
             st.session_state.drug_name = "Ozempic"
             st.session_state.diagnosis_code = "E11.9"

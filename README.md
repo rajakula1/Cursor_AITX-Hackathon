@@ -11,6 +11,30 @@ Hackathon build of a LangGraph prior-auth intake pipeline (spec: `PA-Intake-hack
 - Supabase schema in `sql/` (in-memory seed store for early blocks)
 - Streamlit UI (`streamlit run app.py`)
 
+## Architecture
+
+Interactive architecture diagram (Archify showcase):
+
+**[Open `docs/archify/pa-intake-architecture.html`](docs/archify/pa-intake-architecture.html)**
+
+```bash
+# from repo root
+open docs/archify/pa-intake-architecture.html   # macOS
+# or: xdg-open docs/archify/pa-intake-architecture.html
+```
+
+The diagram covers:
+
+| Layer | What it shows |
+| ----- | ------------- |
+| Presentation | Streamlit UI (`app.py`) — fixture load, unmet-field edit, re-score, markdown export |
+| Orchestration | LangGraph 10-node PA pipeline (policy → extract → quote verify → critic → draft → score → alternative → gate → persist) |
+| LLM | OpenRouter Haiku/Sonnet via `ChatOpenAI` (mock extract for offline tests) |
+| Data | In-memory seed store + optional Supabase (`sql/`) |
+| Fixtures | Golden A / B / C paths and gate outcomes |
+
+Machine-readable source: [`docs/archify/pa-intake.architecture.json`](docs/archify/pa-intake.architecture.json).
+
 ## Blocks
 
 | Block | Status |
@@ -90,6 +114,24 @@ streamlit run app.py
 ```
 
 Sidebar loads golden fixtures (start demo with **fixture_c**). Met fields are read-only; unmet fields are editable; **Re-score** re-runs likelihood + gate without re-extracting.
+
+## Live OpenRouter
+
+```bash
+# 1. Put a real key in .env
+cp .env.example .env   # if needed
+# OPENROUTER_API_KEY=sk-or-v1-...
+# USE_MOCK_EXTRACT=0
+# INJECT_FIXTURE_C_HALLUCINATION=1   # optional, talk-track #2 only
+
+python scripts/ping_openrouter.py
+python scripts/live_smoke.py      # ping + Fixture B live graph
+streamlit run app.py              # sidebar shows LIVE vs MOCK
+```
+
+Pytest always forces `USE_MOCK_EXTRACT=1` via `tests/conftest.py` so offline tests stay free.
+
+Live hardening: justification is verified-quotes-only; critic soft-fail rejects all fields; exceptions are sanitized before persist; Fixture C inject defaults **off**.
 
 ## Block 8 — Break-it + demo
 

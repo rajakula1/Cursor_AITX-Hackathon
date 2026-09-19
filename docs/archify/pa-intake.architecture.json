@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PA Intake & Auto-Draft Agent",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "output": "pa-intake-architecture.html",
+    "viewBox": [1280, 700],
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "Intake to draft",
+        "focus": ["clinician", "streamlit", "langgraph", "openrouter", "cases"],
+        "note": "Submit drug, DX, payer, and note; Streamlit runs LangGraph and persists the draft."
+      },
+      {
+        "id": "llm-path",
+        "label": "LLM path",
+        "focus": ["langgraph", "openrouter", "deterministic"],
+        "note": "Haiku extracts via OpenRouter; quote-span check and scoring stay in code."
+      },
+      {
+        "id": "demo-fixtures",
+        "label": "Golden fixtures",
+        "focus": ["fixtures", "streamlit", "langgraph"],
+        "note": "Sidebar loads Fixture C → A → B for the demo."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "clinician",
+      "type": "external",
+      "label": "Clinician",
+      "sublabel": "Demo operator",
+      "pos": [48, 280],
+      "size": [120, 56]
+    },
+    {
+      "id": "fixtures",
+      "type": "external",
+      "label": "Golden fixtures",
+      "sublabel": "fixtures/*.json",
+      "pos": [48, 100],
+      "size": [140, 56],
+      "tag": "synthetic"
+    },
+    {
+      "id": "streamlit",
+      "type": "frontend",
+      "label": "Streamlit UI",
+      "sublabel": "app.py",
+      "pos": [280, 270],
+      "size": [140, 68],
+      "tag": "review"
+    },
+    {
+      "id": "langgraph",
+      "type": "backend",
+      "label": "LangGraph agent",
+      "sublabel": "10-node PAState",
+      "pos": [540, 260],
+      "size": [160, 80],
+      "tag": "intake→finalize"
+    },
+    {
+      "id": "deterministic",
+      "type": "security",
+      "label": "Deterministic checks",
+      "sublabel": "quote · score · gate",
+      "pos": [530, 90],
+      "size": [180, 68],
+      "tag": "no LLM"
+    },
+    {
+      "id": "openrouter",
+      "type": "external",
+      "label": "OpenRouter",
+      "sublabel": "Haiku · Sonnet",
+      "brand": "openrouter",
+      "pos": [840, 260],
+      "size": [160, 80],
+      "tag": "API key"
+    },
+    {
+      "id": "cases",
+      "type": "database",
+      "label": "pa_cases store",
+      "sublabel": "memory · Supabase",
+      "brand": "supabase",
+      "pos": [660, 470],
+      "size": [160, 68]
+    },
+    {
+      "id": "policies",
+      "type": "database",
+      "label": "Policy seed data",
+      "sublabel": "aliases · formulary",
+      "pos": [400, 470],
+      "size": [160, 68]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Hackathon runtime",
+      "wraps": ["streamlit", "langgraph", "deterministic", "cases", "policies"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "clinician-to-ui",
+      "from": "clinician",
+      "to": "streamlit",
+      "label": "submit case",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fixtures-to-ui",
+      "from": "fixtures",
+      "to": "streamlit",
+      "label": "load demo",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "ui-to-graph",
+      "from": "streamlit",
+      "to": "langgraph",
+      "label": "run_case()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "graph-to-llm",
+      "from": "langgraph",
+      "to": "openrouter",
+      "label": "extract / critique",
+      "variant": "emphasis"
+    },
+    {
+      "id": "graph-to-deterministic",
+      "from": "langgraph",
+      "to": "deterministic",
+      "label": "span · gate",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "graph-to-policies",
+      "from": "langgraph",
+      "to": "policies",
+      "label": "policy lookup",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "graph-to-cases",
+      "from": "langgraph",
+      "to": "cases",
+      "label": "upsert",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Differentiate",
+      "items": [
+        "Escalate fields, not cases",
+        "Quote-span check in code",
+        "Critic + math likelihood score"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Stack",
+      "items": [
+        "Streamlit + LangGraph",
+        "OpenRouter Haiku / Sonnet",
+        "Seed store · optional Supabase"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Guardrails",
+      "items": [
+        "Synthetic notes only",
+        "Fixtures C → A → B",
+        "Soft-fail → needs_review"
+      ]
+    }
+  ]
+}

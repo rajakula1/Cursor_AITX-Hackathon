@@ -18,6 +18,8 @@ class ExtractionOut(TypedDict):
 
 _CACHE: dict[tuple[str, str], ExtractionOut] = {}
 _MOCK_BY_CRITERION: dict[str, ExtractionOut] = {}
+# Live-mode overrides (e.g. Fixture C hallucinated c3) applied after Haiku
+_LIVE_OVERRIDES: dict[str, ExtractionOut] = {}
 
 
 def note_hash(note: str) -> str:
@@ -36,6 +38,16 @@ def configure_mock_extractions(mapping: dict[str, ExtractionOut]) -> None:
     """Test/fixture hook: set mock outputs per criterion_id."""
     _MOCK_BY_CRITERION.clear()
     _MOCK_BY_CRITERION.update(mapping)
+
+
+def set_live_overrides(mapping: dict[str, ExtractionOut]) -> None:
+    """Force specific criterion outputs in live mode (demo hallucination)."""
+    _LIVE_OVERRIDES.clear()
+    _LIVE_OVERRIDES.update(mapping)
+
+
+def clear_live_overrides() -> None:
+    _LIVE_OVERRIDES.clear()
 
 
 def _mock_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
@@ -66,8 +78,15 @@ async def extract_field(criterion: dict[str, Any], note: str) -> ExtractionOut:
     if key in _CACHE:
         return dict(_CACHE[key])  # type: ignore[return-value]
 
+    cid = str(criterion["id"])
+    # Demo inject wins even in live mode (Fixture C hallucinated quote)
+    if cid in _LIVE_OVERRIDES:
+        result = dict(_LIVE_OVERRIDES[cid])  # type: ignore[assignment]
+        _CACHE[key] = result  # type: ignore[assignment]
+        return dict(result)  # type: ignore[return-value]
+
     settings = get_settings()
-    if settings.use_mock_extract:
+    if settings.use_mock_llm:
         result = _mock_extract(criterion, note)
     else:
         result = await _live_extract(criterion, note)
@@ -97,18 +116,27 @@ async def _live_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
     """OpenRouter Haiku structured extract; one retry then soft-fail."""
     from pydantic import BaseModel, Field
 
-    from pa_agent.llm import get_extract_llm
+    from pa_agent.llm import get_extract_llm, structured
 
     class _Out(BaseModel):
-        value: str | None = Field(default=None)
-        confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-        quote: str | None = Field(default=None)
+        value: str | None = Field(
+            default=None,
+            description="Short answer for the criterion, or null if unsupported",
+        )
+        confidence: float = Field(
+            default=0.0, ge=0.0, le=1.0, description="Confidence 0-1"
+        )
+        quote: str | None = Field(
+            default=None,
+            description="Verbatim substring copied from the note, or null",
+        )
 
     prompt = (
         "Extract evidence for the prior-auth criterion from the clinical note.\n"
         "Return value (short answer), confidence 0-1, and a verbatim quote "
         "copied exactly from the note. If unsupported, value/quote null and "
-        "confidence 0.\n\n"
+        "confidence 0.\n"
+        "Never invent a quote that is not present in the note.\n\n"
         f"Criterion: {criterion.get('text')}\n\n"
         f"Note:\n{note}"
     )
@@ -116,8 +144,9 @@ async def _live_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
     last_exc: Exception | None = None
     for _attempt in range(2):  # initial + one retry (spec §7)
         try:
-            llm = get_extract_llm().with_structured_output(_Out)
-            out: _Out = await llm.ainvoke(prompt)
+            llm = structured(get_extract_llm(), _Out)
+            # Prefer sync invoke inside the fan-out thread to avoid loop reuse bugs
+            out: _Out = await asyncio.to_thread(llm.invoke, prompt)
             return {
                 "value": out.value,
                 "confidence": float(out.confidence),
@@ -125,9 +154,19 @@ async def _live_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
             }
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.35)
 
-    _ = last_exc
+    # Soft-fail → field not extracted → needs_review
+    if last_exc:
+        import logging
+
+        from pa_agent.errors import sanitize_exc
+
+        logging.getLogger("pa_agent.extract").warning(
+            "live extract failed for %s: %s",
+            criterion.get("id"),
+            sanitize_exc(last_exc),
+        )
     return {"value": None, "confidence": 0.0, "quote": None}
 
 

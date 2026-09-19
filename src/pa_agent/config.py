@@ -11,6 +11,22 @@ from dotenv import load_dotenv
 _ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(_ROOT / ".env")
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off", ""}
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    """Parse boolean env; unknown/garbage values fall back to default (safer)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    val = raw.strip().lower()
+    if val in _TRUTHY:
+        return True
+    if val in _FALSY:
+        return False
+    return default
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -22,13 +38,18 @@ class Settings:
     critic_model: str = "anthropic/claude-sonnet-4.5"
     supabase_url: str | None = None
     supabase_key: str | None = None
-    llm_timeout_s: float = 45.0
+    llm_timeout_s: float = 60.0
     llm_max_retries: int = 1
-    use_mock_extract: bool = True  # Block 1 default until routing works
+    # When True: extract/critic/draft use fixtures/heuristic mocks (offline tests)
+    use_mock_llm: bool = True
+    # Demo-only: inject Fixture C hallucinated c3 (default OFF — enable for talk track)
+    inject_fixture_c_hallucination: bool = False
 
 
 def get_settings() -> Settings:
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    # Default mock ON so typos don't accidentally go live + spend + egress
+    use_mock = _env_flag("USE_MOCK_EXTRACT", default=True)
     return Settings(
         openrouter_api_key=key,
         openrouter_http_referer=os.environ.get(
@@ -37,12 +58,18 @@ def get_settings() -> Settings:
         openrouter_app_title=os.environ.get(
             "OPENROUTER_APP_TITLE", "PA-Intake-Hackathon"
         ),
+        extract_model=os.environ.get(
+            "OPENROUTER_EXTRACT_MODEL", "anthropic/claude-haiku-4.5"
+        ),
+        critic_model=os.environ.get(
+            "OPENROUTER_CRITIC_MODEL", "anthropic/claude-sonnet-4.5"
+        ),
         supabase_url=os.environ.get("SUPABASE_URL") or None,
         supabase_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or None,
-        use_mock_extract=os.environ.get("USE_MOCK_EXTRACT", "1") not in (
-            "0",
-            "false",
-            "False",
+        llm_timeout_s=float(os.environ.get("LLM_TIMEOUT_S", "60")),
+        use_mock_llm=use_mock,
+        inject_fixture_c_hallucination=_env_flag(
+            "INJECT_FIXTURE_C_HALLUCINATION", default=False
         ),
     )
 
@@ -57,3 +84,7 @@ def require_openrouter_key() -> str:
             "Cursor credits do not pay OpenRouter calls."
         )
     return settings.openrouter_api_key
+
+
+def is_live_llm() -> bool:
+    return not get_settings().use_mock_llm

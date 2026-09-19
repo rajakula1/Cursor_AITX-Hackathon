@@ -61,8 +61,10 @@ def save_case(state: dict[str, Any]) -> dict[str, Any]:
         try:
             _upsert_supabase(row)
         except Exception as exc:  # noqa: BLE001 — persistence soft-fail
+            from pa_agent.errors import sanitize_exc
+
             log = list(saved.get("error_log") or [])
-            log.append(f"supabase_upsert: {exc}")
+            log.append(f"supabase_upsert: {sanitize_exc(exc)}")
             saved = _save_mem(str(case_id), {**saved, "error_log": log})
 
     return saved

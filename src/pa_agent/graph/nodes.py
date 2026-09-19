@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 from pa_agent.criteria import is_criterion_met, quote_in_note
-from pa_agent.graph.helpers import append_error
+from pa_agent.graph.helpers import append_error, run_async
 from pa_agent.state import CriterionResult, PAState
 from pa_agent.tools.extract import extract_all
 from pa_agent.tools.formulary import get_formulary_alternative
@@ -122,11 +122,9 @@ def coverage_check_node(state: PAState) -> dict[str, Any]:
 def justification_extraction_node(state: PAState) -> dict[str, Any]:
     """OpenRouter Haiku fan-out per criterion; cache by (note_hash, criterion_id)."""
     try:
-        import asyncio
-
         criteria = list(state.get("policy_criteria") or [])
         note = state.get("clinical_note") or ""
-        pairs = asyncio.run(extract_all(criteria, note))
+        pairs = run_async(extract_all(criteria, note))
 
         extractions: list[CriterionResult] = []
         for criterion, out in pairs:
@@ -178,8 +176,6 @@ def quote_verify_node(state: PAState) -> dict[str, Any]:
 def critic_node(state: PAState) -> dict[str, Any]:
     """One batched Sonnet critic over all extractions. May lower confidence only."""
     try:
-        import asyncio
-
         from pa_agent.tools.critique import apply_critic_decisions, critique_all
 
         extractions = list(state.get("extractions") or [])
@@ -187,7 +183,7 @@ def critic_node(state: PAState) -> dict[str, Any]:
             return {"extractions": []}
 
         note = state.get("clinical_note") or ""
-        decisions = asyncio.run(critique_all(extractions, note))  # type: ignore[arg-type]
+        decisions = run_async(critique_all(extractions, note))  # type: ignore[arg-type]
         updated = apply_critic_decisions(extractions, decisions)  # type: ignore[arg-type]
         return {"extractions": updated}
     except Exception as exc:  # noqa: BLE001
@@ -197,11 +193,9 @@ def critic_node(state: PAState) -> dict[str, Any]:
 def pa_draft_builder_node(state: PAState) -> dict[str, Any]:
     """Fill typed PAForm from critic-adjusted fields; narrative = verified quotes only."""
     try:
-        import asyncio
-
         from pa_agent.tools.draft import build_pa_form
 
-        form = asyncio.run(build_pa_form(state))
+        form = run_async(build_pa_form(state))
         return {"draft_pa_form": form, "missing_fields": list(form.get("missing_fields") or [])}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "pa_draft_builder_node", exc)

@@ -138,58 +138,55 @@ def build_pa_form_deterministic(state: PAState) -> PAForm:
 
 
 async def build_pa_form(state: PAState) -> PAForm:
+    """Always ground justification in verified quotes (deterministic core).
+
+    Live mode may only fill quantity/duration via Sonnet; narrative never
+    trusts free-form LLM text (spec: verified quotes only).
+    """
+    base = build_pa_form_deterministic(state)
     settings = get_settings()
-    if settings.use_mock_extract:
-        return build_pa_form_deterministic(state)
+    if settings.use_mock_llm:
+        return base
     try:
-        return await _live_draft(state)
-    except Exception:  # noqa: BLE001
-        return build_pa_form_deterministic(state)
+        qty, dur = await _live_qty_duration(state)
+        if qty:
+            base["quantity"] = qty
+        if dur:
+            base["duration"] = dur
+        base["export_markdown"] = build_export_markdown(
+            base, status=state.get("status")
+        )
+    except Exception:  # noqa: BLE001 — soft-fail; keep deterministic draft
+        pass
+    return base
 
 
-async def _live_draft(state: PAState) -> PAForm:
+async def _live_qty_duration(state: PAState) -> tuple[Optional[str], Optional[str]]:
+    """Optional quantity/duration only — no free-form clinical narrative."""
     from pydantic import BaseModel, Field
 
-    from pa_agent.llm import get_draft_llm
+    from pa_agent.llm import get_draft_llm, structured
 
-    class _Draft(BaseModel):
-        clinical_justification: str
-        quantity: Optional[str] = None
-        duration: Optional[str] = None
-
-    verified = _verified_quotes(list(state.get("extractions") or []))  # type: ignore[arg-type]
-    prompt = (
-        "Draft a prior-authorization clinical justification.\n"
-        "ONLY use the verified quotes below — do not invent facts.\n"
-        "If quotes are insufficient, say what is missing briefly.\n\n"
-        f"Drug: {state.get('drug_name')}\n"
-        f"Diagnosis: {state.get('diagnosis_code')}\n"
-        f"Payer: {state.get('payer_name')}\n\n"
-        "Verified quotes:\n"
-        + ("\n".join(f"- {q}" for q in verified) or "- (none)")
-    )
-
-    llm = get_draft_llm().with_structured_output(_Draft)
-    out: _Draft = await llm.ainvoke(prompt)
-
-    # Strip any sentence that is not grounded in a verified quote substring
-    justification = out.clinical_justification
-    # Keep LLM narrative but append verified quote block as ground truth
-    if verified:
-        justification = (
-            justification.strip()
-            + "\n\nSupporting verified quotes:\n"
-            + "\n".join(f"- {q}" for q in verified)
+    class _Meta(BaseModel):
+        quantity: Optional[str] = Field(
+            default=None, description="Dose/quantity if explicitly in verified quotes"
+        )
+        duration: Optional[str] = Field(
+            default=None, description="Duration if explicitly in verified quotes"
         )
 
-    base = build_pa_form_deterministic(state)
-    base["clinical_justification"] = justification
-    base["quantity"] = out.quantity
-    base["duration"] = out.duration
-    base["export_markdown"] = build_export_markdown(
-        base, status=state.get("status")
+    verified = _verified_quotes(list(state.get("extractions") or []))  # type: ignore[arg-type]
+    if not verified:
+        return None, None
+
+    prompt = (
+        "From the verified quotes only, extract quantity and duration if present. "
+        "If not explicitly stated, return nulls. Do not invent.\n\n"
+        + "\n".join(f"- {q}" for q in verified)
     )
-    return base
+    llm = structured(get_draft_llm(), _Meta)
+    out: _Meta = llm.invoke(prompt)
+    return out.quantity, out.duration
 
 
 def build_pa_form_sync(state: PAState) -> PAForm:

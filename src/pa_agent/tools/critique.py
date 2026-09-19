@@ -128,9 +128,9 @@ def apply_critic_decisions(
 async def critique_all(
     extractions: list[CriterionResult], note: str
 ) -> list[CriticDecision]:
-    """One call over all fields. Mock when USE_MOCK_EXTRACT=1 (LLM mocks on)."""
+    """One call over all fields. Mock when USE_MOCK_EXTRACT=1."""
     settings = get_settings()
-    if settings.use_mock_extract:
+    if settings.use_mock_llm:
         return _default_mock_decisions(extractions)
     return await _live_critique(extractions, note)
 
@@ -140,7 +140,7 @@ async def _live_critique(
 ) -> list[CriticDecision]:
     from pydantic import BaseModel, Field
 
-    from pa_agent.llm import get_critic_llm
+    from pa_agent.llm import get_critic_llm, structured
 
     class _Item(BaseModel):
         criterion_id: str
@@ -168,6 +168,7 @@ async def _live_critique(
         "Rules:\n"
         "- If quote_verified is false, you MUST reject with confidence 0.\n"
         "- You may lower confidence; never invent evidence not in the note.\n"
+        "- Never raise confidence above the extractor's value.\n"
         "- Return one decision per criterion_id.\n\n"
         f"Extractions JSON:\n{payload}\n\n"
         f"Clinical note:\n{note}"
@@ -176,8 +177,9 @@ async def _live_critique(
     last_exc: Optional[Exception] = None
     for _ in range(2):
         try:
-            llm = get_critic_llm().with_structured_output(_Batch)
-            out: _Batch = await llm.ainvoke(prompt)
+            llm = structured(get_critic_llm(), _Batch)
+            # Sync invoke — avoids event-loop conflicts after extract's asyncio.run
+            out: _Batch = llm.invoke(prompt)
             return [
                 {
                     "criterion_id": d.criterion_id,
@@ -189,16 +191,22 @@ async def _live_critique(
             ]
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.35)
 
-    # Soft-fail: confirm-in-place so graph continues to needs_review via gate
-    _ = last_exc
+    import logging
+
+    from pa_agent.errors import sanitize_exc
+
+    logging.getLogger("pa_agent.critique").warning(
+        "live critic failed: %s", sanitize_exc(last_exc) if last_exc else "unknown"
+    )
+    # Fail closed: reject all fields so gate escalates to needs_review
     return [
         {
             "criterion_id": str(e["criterion_id"]),
-            "action": "confirm",
-            "confidence": float(e.get("confidence") or 0.0),
-            "reason": "Critic unavailable (timeout/schema); left extraction unchanged.",
+            "action": "reject",
+            "confidence": 0.0,
+            "reason": "Critic unavailable (timeout/schema); fail closed → review.",
         }
         for e in extractions
     ]

@@ -6,6 +6,8 @@ from typing import Any, Optional, Sequence
 
 MET_CONFIDENCE_THRESHOLD = 0.70
 ALTERNATIVE_LIKELIHOOD_THRESHOLD = 0.55
+# Reject tiny substrings that can accidentally "verify" (e.g. "the", "neg")
+MIN_QUOTE_CHARS = 24
 
 
 def normalize_text(text: str) -> str:
@@ -16,7 +18,10 @@ def normalize_text(text: str) -> str:
 def quote_in_note(quote: Optional[str], note: str) -> bool:
     if not quote or not str(quote).strip():
         return False
-    return normalize_text(quote) in normalize_text(note)
+    q = str(quote).strip()
+    if len(q) < MIN_QUOTE_CHARS:
+        return False
+    return normalize_text(q) in normalize_text(note)
 
 
 def is_criterion_met(

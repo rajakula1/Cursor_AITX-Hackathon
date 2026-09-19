@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pa_agent.config import get_settings
 from pa_agent.tools.critique import (
     CriticDecision,
     clear_mock_critic,
@@ -32,29 +33,58 @@ def list_fixtures() -> list[Path]:
     return sorted(FIXTURES_DIR.glob("fixture_*.json"))
 
 
-def apply_fixture_mocks(fixture: dict[str, Any]) -> None:
-    """Install mock extract (+ optional critic) outputs; clear LLM cache."""
+def apply_fixture_mocks(fixture: dict[str, Any], *, force: bool = False) -> None:
+    """Install mock extract (+ optional critic) outputs; clear LLM cache.
+
+    In live mode (USE_MOCK_EXTRACT=0), skips full mocks unless force=True.
+    Fixture C still injects only the hallucinated c3 quote when
+    INJECT_FIXTURE_C_HALLUCINATION=1 (default off) so talk-track #2 stays optional.
+    """
+    from pa_agent.tools.extract import clear_live_overrides, set_live_overrides
+
     clear_extract_cache()
     clear_mock_critic()
+    clear_live_overrides()
+    settings = get_settings()
 
-    raw = fixture.get("mock_extractions") or {}
-    mapping: dict[str, ExtractionOut] = {}
-    for cid, payload in raw.items():
-        mapping[cid] = {
-            "value": payload.get("value"),
-            "confidence": float(payload.get("confidence") or 0.0),
-            "quote": payload.get("quote"),
-        }
-    configure_mock_extractions(mapping)
-
-    critic_raw = fixture.get("mock_critic") or {}
-    if critic_raw:
-        decisions: dict[str, CriticDecision] = {}
-        for cid, payload in critic_raw.items():
-            decisions[cid] = {
-                "criterion_id": cid,
-                "action": payload["action"],
+    if settings.use_mock_llm or force:
+        raw = fixture.get("mock_extractions") or {}
+        mapping: dict[str, ExtractionOut] = {}
+        for cid, payload in raw.items():
+            mapping[cid] = {
+                "value": payload.get("value"),
                 "confidence": float(payload.get("confidence") or 0.0),
-                "reason": str(payload.get("reason") or ""),
+                "quote": payload.get("quote"),
             }
-        configure_mock_critic(decisions)
+        configure_mock_extractions(mapping)
+
+        critic_raw = fixture.get("mock_critic") or {}
+        if critic_raw:
+            decisions: dict[str, CriticDecision] = {}
+            for cid, payload in critic_raw.items():
+                decisions[cid] = {
+                    "criterion_id": cid,
+                    "action": payload["action"],
+                    "confidence": float(payload.get("confidence") or 0.0),
+                    "reason": str(payload.get("reason") or ""),
+                }
+            configure_mock_critic(decisions)
+        return
+
+    # Live mode: optional single-field hallucination inject for Fixture C
+    if (
+        settings.inject_fixture_c_hallucination
+        and fixture.get("id") == "fixture_c_needs_review"
+    ):
+        raw = fixture.get("mock_extractions") or {}
+        c3 = raw.get("c3")
+        if c3:
+            set_live_overrides(
+                {
+                    "c3": {
+                        "value": c3.get("value"),
+                        "confidence": float(c3.get("confidence") or 0.0),
+                        "quote": c3.get("quote"),
+                    }
+                }
+            )
