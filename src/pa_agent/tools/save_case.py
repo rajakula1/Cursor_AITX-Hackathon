@@ -1,13 +1,15 @@
-"""save_case — upsert pa_cases (in-memory; Supabase when configured)."""
+"""save_case — upsert pa_cases (in-memory + Supabase when configured)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
 
-from pa_agent.config import get_settings
-from pa_agent.data.seed_store import get_case as _get_mem
-from pa_agent.data.seed_store import save_case as _save_mem
+from pa_agent.data.repository import get_case as _get_case
+from pa_agent.data.repository import get_case_mem as _get_mem
+from pa_agent.data.repository import save_case_mem as _save_mem
+from pa_agent.data.repository import upsert_pa_case
+from pa_agent.data.supabase_client import is_configured
 
 # Columns aligned with sql/schema.sql pa_cases
 _PA_CASE_KEYS = (
@@ -57,9 +59,14 @@ def save_case(state: dict[str, Any]) -> dict[str, Any]:
     # Always keep in-memory copy for tests / demo without Supabase
     saved = _save_mem(str(case_id), row)
 
-    if _supabase_configured():
+    if is_configured():
         try:
-            _upsert_supabase(row)
+            payload = {
+                k: v
+                for k, v in row.items()
+                if k in _PA_CASE_KEYS or k in ("created_at", "updated_at")
+            }
+            upsert_pa_case(payload)
         except Exception as exc:  # noqa: BLE001 — persistence soft-fail
             from pa_agent.errors import sanitize_exc
 
@@ -71,25 +78,4 @@ def save_case(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_saved_case(case_id: str) -> dict[str, Any] | None:
-    return _get_mem(case_id)
-
-
-def _supabase_configured() -> bool:
-    settings = get_settings()
-    url = (settings.supabase_url or "").strip()
-    key = (settings.supabase_key or "").strip()
-    if not url or not key:
-        return False
-    if "your-project" in url or key.startswith("your-"):
-        return False
-    return True
-
-
-def _upsert_supabase(row: dict[str, Any]) -> None:
-    from supabase import create_client
-
-    settings = get_settings()
-    assert settings.supabase_url and settings.supabase_key
-    client = create_client(settings.supabase_url, settings.supabase_key)
-    payload = {k: v for k, v in row.items() if k in _PA_CASE_KEYS or k in ("created_at", "updated_at")}
-    client.table("pa_cases").upsert(payload, on_conflict="case_id").execute()
+    return _get_case(case_id)

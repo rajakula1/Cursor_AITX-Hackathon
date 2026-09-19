@@ -1,10 +1,10 @@
-"""get_payer_policy — alias map + policy row lookup."""
+"""get_payer_policy — alias map + policy row lookup (Supabase or seed)."""
 
 from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
-from pa_agent.data.seed_store import find_policy, resolve_drug, resolve_payer
+from pa_agent.data.repository import find_policy, resolve_drug, resolve_payer
 
 
 class PolicyResult(TypedDict):

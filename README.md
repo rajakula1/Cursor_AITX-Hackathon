@@ -15,7 +15,7 @@ Hackathon build of a LangGraph prior-auth intake pipeline (spec: `PA-Intake-hack
 
 Interactive architecture diagram (Archify showcase):
 
-**[Open `docs/archify/pa-intake-architecture.html`](docs/archify/pa-intake-architecture.html)**
+**[Open](docs/archify/pa-intake-architecture.html)** `docs/archify/pa-intake-architecture.html`
 
 ```bash
 # from repo root
@@ -25,28 +25,34 @@ open docs/archify/pa-intake-architecture.html   # macOS
 
 The diagram covers:
 
-| Layer | What it shows |
-| ----- | ------------- |
-| Presentation | Streamlit UI (`app.py`) — fixture load, unmet-field edit, re-score, markdown export |
-| Orchestration | LangGraph 10-node PA pipeline (policy → extract → quote verify → critic → draft → score → alternative → gate → persist) |
-| LLM | OpenRouter Haiku/Sonnet via `ChatOpenAI` (mock extract for offline tests) |
-| Data | In-memory seed store + optional Supabase (`sql/`) |
-| Fixtures | Golden A / B / C paths and gate outcomes |
 
-Machine-readable source: [`docs/archify/pa-intake.architecture.json`](docs/archify/pa-intake.architecture.json).
+| Layer         | What it shows                                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Presentation  | Streamlit UI (`app.py`) — fixture load, unmet-field edit, re-score, markdown export                                     |
+| Orchestration | LangGraph 10-node PA pipeline (policy → extract → quote verify → critic → draft → score → alternative → gate → persist) |
+| LLM           | OpenRouter Haiku/Sonnet via `ChatOpenAI` (mock extract for offline tests)                                               |
+| Data          | In-memory seed store + optional Supabase (`sql/`)                                                                       |
+| Fixtures      | Golden A / B / C paths and gate outcomes                                                                                |
+
+
+Machine-readable source: `[docs/archify/pa-intake.architecture.json](docs/archify/pa-intake.architecture.json)`.
 
 ## Blocks
 
-| Block | Status |
-| ----- | ------ |
-| 1 Setup + fixtures | done |
-| 2 Graph skeleton | done |
-| 3 Extraction + quote verify | done |
-| 4 Critic | done |
-| 5 Draft + score + alternative | done |
-| 6 Gate + persistence | done |
-| 7 UI | done |
-| 8 Break-it + demo | **done** |
+
+| Block                         | Status   |
+| ----------------------------- | -------- |
+| 1 Setup + fixtures            | done     |
+| 2 Graph skeleton              | done     |
+| 3 Extraction + quote verify   | done     |
+| 4 Critic                      | done     |
+| 5 Draft + score + alternative | done     |
+| 6 Gate + persistence          | done     |
+| 7 UI                          | done     |
+| 8 Break-it + demo             | **done** |
+
+
+
 
 ## Setup
 
@@ -56,9 +62,27 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # put your OpenRouter key in .env
+# put SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in .env (optional but recommended)
 ```
 
-Supabase (optional for Block 1): run `sql/schema.sql` then `sql/seed.sql` in the SQL editor.
+### Supabase (persistence + live policy lookup)
+
+1. In [Supabase Dashboard](https://supabase.com/dashboard) → your project → **SQL Editor**, paste and run [`sql/setup.sql`](sql/setup.sql) (schema + seed in one shot).
+2. Confirm from the repo:
+
+```bash
+python scripts/ping_supabase.py          # should print ok: true
+# if tables exist but are empty:
+python scripts/ping_supabase.py --seed
+```
+
+When configured, the agent:
+
+- resolves payer/drug aliases and policies from Supabase (falls back to in-memory seeds if unreachable)
+- upserts every case into `pa_cases`
+- shows connection status in the Streamlit sidebar
+
+Without Supabase credentials, everything still runs against the in-memory seed store.
 
 ## Block 1 checks
 
@@ -70,12 +94,16 @@ pytest tests/test_block1_fixtures.py -q
 python scripts/ping_openrouter.py
 ```
 
+
+
 ## Block 2 checks
 
 ```bash
 pytest tests/test_block2_graph.py -q
 # Fixture A → no_pa_required; unknown policy → needs_review
 ```
+
+
 
 ## Block 3 checks
 
@@ -85,12 +113,16 @@ pytest tests/test_block3_extract_quote.py -q
 # Fixture C → hallucinated quote confidence 0; missing c3,c4
 ```
 
+
+
 ## Block 4 checks
 
 ```bash
 pytest tests/test_block4_critic.py -q
 # critic_note per field; cannot raise failed quote-verify; downgrade can flip gate
 ```
+
+
 
 ## Block 5 checks
 
@@ -99,6 +131,8 @@ pytest tests/test_block5_draft_score.py -q
 # Fixture B → draft + likelihood ≥ 0.75; Fixture C → alt etanercept, likelihood ~0.3–0.5
 ```
 
+
+
 ## Block 6 checks
 
 ```bash
@@ -106,6 +140,8 @@ pytest tests/test_block6_gate_persist.py -q
 python scripts/run_golden.py
 # gate escalates fields; pa_cases upsert; export markdown paste-ready
 ```
+
+
 
 ## Block 7 — UI
 
@@ -145,16 +181,21 @@ Break-it covers empty note, unknown drug/payer, hallucinated quote — always `n
 
 ### 90-second talk track
 
-1. Escalate **fields**, not cases — Fixture C checklist  
-2. Model cannot invent evidence — failed quote → confidence 0 in code  
-3. Second model critiques, then **math** scores approval  
-4. Likely deny → same-class **no-PA** alternative  
+1. Escalate **fields**, not cases — Fixture C checklist
+2. Model cannot invent evidence — failed quote → confidence 0 in code
+3. Second model critiques, then **math** scores approval
+4. Likely deny → same-class **no-PA** alternative
 5. Paste the markdown. Stop talking.
+
+
 
 ## Golden fixtures
 
-| Fixture | Expect |
-| ------- | ------ |
-| `fixtures/fixture_a_no_pa.json` | `no_pa_required` |
-| `fixtures/fixture_b_auto_completed.json` | `auto_completed`, likelihood ≥ 0.75 |
-| `fixtures/fixture_c_needs_review.json` | `needs_review`, 2 missing fields, alternative `etanercept` |
+
+| Fixture                                  | Expect                                                     |
+| ---------------------------------------- | ---------------------------------------------------------- |
+| `fixtures/fixture_a_no_pa.json`          | `no_pa_required`                                           |
+| `fixtures/fixture_b_auto_completed.json` | `auto_completed`, likelihood ≥ 0.75                        |
+| `fixtures/fixture_c_needs_review.json`   | `needs_review`, 2 missing fields, alternative `etanercept` |
+
+

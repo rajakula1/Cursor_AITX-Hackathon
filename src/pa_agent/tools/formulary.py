@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pa_agent.data.seed_store import find_formulary_alternative
+from pa_agent.data.repository import find_formulary_alternative
 
 
 def get_formulary_alternative(

@@ -1,4 +1,4 @@
-"""In-memory seed store (Block 1). Supabase client lands in a later block."""
+"""In-memory seed store — offline fallback when Supabase is unset/unreachable."""
 
 from __future__ import annotations
 

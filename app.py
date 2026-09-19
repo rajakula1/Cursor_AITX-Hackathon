@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from pa_agent.config import get_settings, is_live_llm  # noqa: E402
+from pa_agent.data.supabase_client import health_check, is_configured  # noqa: E402
 from pa_agent.fixtures import apply_fixture_mocks, load_fixture  # noqa: E402
 from pa_agent.graph import run_case  # noqa: E402
 from pa_agent.review import apply_human_edits, rescore_case  # noqa: E402
@@ -280,6 +281,25 @@ def main() -> None:
         else:
             st.warning("Mode: **MOCK** (`USE_MOCK_EXTRACT=1`)")
             st.caption("Set `USE_MOCK_EXTRACT=0` + real key in `.env` for live calls.")
+
+        st.divider()
+        st.subheader("Supabase")
+        if not is_configured():
+            st.warning("Not configured — using in-memory seeds")
+            st.caption("Set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in `.env`.")
+        else:
+            sb = health_check()
+            if sb.get("ok"):
+                st.success("Connected — policies & `pa_cases` persist live")
+                tables = sb.get("tables") or {}
+                st.caption(
+                    f"policies={tables.get('payer_policies')} · "
+                    f"cases={tables.get('pa_cases')}"
+                )
+            else:
+                st.error(sb.get("message") or "Supabase error")
+                st.caption("Run `sql/schema.sql` then `python scripts/ping_supabase.py --seed`")
+
         st.caption(
             "Talk-track #2: set `INJECT_FIXTURE_C_HALLUCINATION=1` in `.env` "
             "to force Fixture C's fake c3 quote (default off)."
