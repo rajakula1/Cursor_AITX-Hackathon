@@ -5,9 +5,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+from functools import lru_cache
 from typing import Any, TypedDict
 
+from pydantic import BaseModel, Field
+
 from pa_agent.config import get_settings
+
+_log = logging.getLogger("pa_agent.extract")
 
 
 class ExtractionOut(TypedDict):
@@ -16,10 +22,29 @@ class ExtractionOut(TypedDict):
     quote: str | None
 
 
+class _ExtractSchema(BaseModel):
+    value: str | None = Field(
+        default=None,
+        description="Short answer for the criterion, or null if unsupported",
+    )
+    confidence: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Confidence 0-1"
+    )
+    quote: str | None = Field(
+        default=None,
+        description="Verbatim substring copied from the note, or null",
+    )
+
+
 _CACHE: dict[tuple[str, str], ExtractionOut] = {}
 _MOCK_BY_CRITERION: dict[str, ExtractionOut] = {}
-# Live-mode overrides (e.g. Fixture C hallucinated c3) applied after Haiku
 _LIVE_OVERRIDES: dict[str, ExtractionOut] = {}
+
+_EXTRACT_SYSTEM = (
+    "Extract evidence for one prior-auth criterion from a clinical note. "
+    "Return value (short), confidence 0-1, and a verbatim quote from the note. "
+    "If unsupported: null value/quote and confidence 0. Never invent a quote."
+)
 
 
 def note_hash(note: str) -> str:
@@ -50,6 +75,13 @@ def clear_live_overrides() -> None:
     _LIVE_OVERRIDES.clear()
 
 
+@lru_cache(maxsize=1)
+def _extract_chain():
+    from pa_agent.llm import get_extract_llm, structured
+
+    return structured(get_extract_llm(), _ExtractSchema)
+
+
 def _mock_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
     cid = criterion["id"]
     if cid in _MOCK_BY_CRITERION:
@@ -72,14 +104,18 @@ def _mock_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
     return {"value": None, "confidence": 0.0, "quote": None}
 
 
-async def extract_field(criterion: dict[str, Any], note: str) -> ExtractionOut:
+async def extract_field(
+    criterion: dict[str, Any],
+    note: str,
+    *,
+    nhash: str | None = None,
+) -> ExtractionOut:
     """Extract one criterion. Cached. Mock when USE_MOCK_EXTRACT=1."""
-    key = (note_hash(note), str(criterion["id"]))
+    key = (nhash or note_hash(note), str(criterion["id"]))
     if key in _CACHE:
         return dict(_CACHE[key])  # type: ignore[return-value]
 
     cid = str(criterion["id"])
-    # Demo inject wins even in live mode (Fixture C hallucinated quote)
     if cid in _LIVE_OVERRIDES:
         result = dict(_LIVE_OVERRIDES[cid])  # type: ignore[assignment]
         _CACHE[key] = result  # type: ignore[assignment]
@@ -102,9 +138,11 @@ async def extract_all(
     if not criteria:
         return []
 
+    nhash = note_hash(note)
+
     async def _one(c: dict[str, Any]) -> tuple[dict[str, Any], ExtractionOut]:
         try:
-            out = await extract_field(c, note)
+            out = await extract_field(c, note, nhash=nhash)
         except Exception:  # noqa: BLE001 — field-level soft fail → needs_review
             out = {"value": None, "confidence": 0.0, "quote": None}
         return c, out
@@ -114,39 +152,23 @@ async def extract_all(
 
 async def _live_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
     """OpenRouter Haiku structured extract; one retry then soft-fail."""
-    from pydantic import BaseModel, Field
+    from langchain_core.messages import HumanMessage, SystemMessage
 
-    from pa_agent.llm import get_extract_llm, structured
+    from pa_agent.errors import sanitize_exc
 
-    class _Out(BaseModel):
-        value: str | None = Field(
-            default=None,
-            description="Short answer for the criterion, or null if unsupported",
-        )
-        confidence: float = Field(
-            default=0.0, ge=0.0, le=1.0, description="Confidence 0-1"
-        )
-        quote: str | None = Field(
-            default=None,
-            description="Verbatim substring copied from the note, or null",
-        )
-
-    prompt = (
-        "Extract evidence for the prior-auth criterion from the clinical note.\n"
-        "Return value (short answer), confidence 0-1, and a verbatim quote "
-        "copied exactly from the note. If unsupported, value/quote null and "
-        "confidence 0.\n"
-        "Never invent a quote that is not present in the note.\n\n"
-        f"Criterion: {criterion.get('text')}\n\n"
-        f"Note:\n{note}"
-    )
+    messages = [
+        SystemMessage(content=_EXTRACT_SYSTEM),
+        HumanMessage(
+            content=f"Criterion: {criterion.get('text')}\n\nNote:\n{note}"
+        ),
+    ]
 
     last_exc: Exception | None = None
-    llm = structured(get_extract_llm(), _Out)
+    chain = _extract_chain()
     for _attempt in range(2):  # initial + one retry (spec §7)
         try:
-            # Prefer sync invoke inside the fan-out thread to avoid loop reuse bugs
-            out: _Out = await asyncio.to_thread(llm.invoke, prompt)
+            # Native async — avoids to_thread pool contention across fan-out
+            out: _ExtractSchema = await chain.ainvoke(messages)
             return {
                 "value": out.value,
                 "confidence": float(out.confidence),
@@ -154,15 +176,10 @@ async def _live_extract(criterion: dict[str, Any], note: str) -> ExtractionOut:
             }
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(0.2)
 
-    # Soft-fail → field not extracted → needs_review
     if last_exc:
-        import logging
-
-        from pa_agent.errors import sanitize_exc
-
-        logging.getLogger("pa_agent.extract").warning(
+        _log.warning(
             "live extract failed for %s: %s",
             criterion.get("id"),
             sanitize_exc(last_exc),

@@ -11,15 +11,19 @@ from pa_agent.state import PAState, PublicStatus
 
 T = TypeVar("T")
 
+# Reuse one worker — avoid create/teardown ThreadPoolExecutor per node
+_ASYNC_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="pa_async"
+)
+
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:
     """Run a coroutine from sync LangGraph nodes.
 
-    Always uses a fresh thread + event loop so sequential OpenRouter
-    nodes (extract → critic → draft) do not hit 'Event loop is closed'.
+    Uses a dedicated worker thread + fresh event loop so sequential OpenRouter
+    nodes (extract → critic) do not hit 'Event loop is closed'.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+    return _ASYNC_POOL.submit(asyncio.run, coro).result()
 
 
 def append_error(state: PAState, where: str, exc: BaseException) -> dict[str, Any]:

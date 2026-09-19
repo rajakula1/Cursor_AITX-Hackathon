@@ -1,4 +1,4 @@
-"""PA Intake & Auto-Draft — Streamlit UI (Block 7).
+"""FieldCheck Prior Authorization — Streamlit UI (Block 7).
 
 Demo data — not real PHI.
 """
@@ -86,7 +86,7 @@ def _run_pipeline() -> None:
             clear_live_overrides()
 
     mode = "LIVE OpenRouter" if is_live_llm() else "MOCK (offline)"
-    with st.spinner(f"Running PA agent ({mode})…"):
+    with st.spinner(f"Running FieldCheck ({mode})…"):
         result = run_case(
             drug_name=st.session_state.drug_name,
             diagnosis_code=st.session_state.diagnosis_code,
@@ -116,7 +116,7 @@ def _render_empty_result() -> None:
             """
 1. Load a demo fixture from the sidebar (**start with Needs review**)
 2. Skim the intake fields and clinical note
-3. Click **Run PA agent**
+3. Click **Run FieldCheck**
             """
         )
         st.caption(
@@ -401,7 +401,7 @@ For talk-track #2, set `INJECT_FIXTURE_C_HALLUCINATION=1` in `.env`.
 
 def main() -> None:
     st.set_page_config(
-        page_title="PA Intake Agent",
+        page_title="FieldCheck Prior Authorization",
         page_icon=":material/health_and_safety:",
         layout="wide",
         initial_sidebar_state="expanded",
@@ -419,7 +419,7 @@ def main() -> None:
             icon=":material/cloud_upload:",
         )
 
-    st.title("PA Intake & Auto-Draft")
+    st.title("FieldCheck Prior Authorization")
     st.caption(
         "Escalate fields, not cases · quote-span check in code · "
         "second-model critic · math score"
@@ -438,7 +438,7 @@ def main() -> None:
             st.text_input("Payer", key="payer_name")
             st.text_area("Clinical note", key="clinical_note", height=280)
             submitted = st.form_submit_button(
-                "Run PA agent",
+                "Run FieldCheck",
                 type="primary",
                 icon=":material/play_arrow:",
                 width="stretch",

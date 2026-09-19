@@ -1,201 +1,202 @@
-# PA Intake & Auto-Draft Agent
+# FieldCheck Prior Authorization
 
-Hackathon build of a LangGraph prior-auth intake pipeline (spec: `PA-Intake-hackathon-spec-v2.md`).
+LangGraph agent that takes drug + diagnosis + payer + clinical note, decides if prior authorization is required, drafts a paste-ready PA form, self-checks extraction, scores approval likelihood, and escalates **fields** — not whole cases.
 
-**Demo data — not real PHI.** Synthetic notes only.
+**Demo data — not real PHI.** Synthetic notes only. Never paste real patient text (notes may go to OpenRouter).
 
-## Stack (locked)
+---
 
-- Python 3.12+ (local venv uses 3.13 if 3.12 is unavailable)
-- LangGraph + OpenRouter (`OPENROUTER_API_KEY` only — no Anthropic SDK)
-- Supabase schema in `sql/` (in-memory seed store for early blocks)
-- Streamlit UI (`streamlit run app.py`)
-
-## Architecture
-
-Interactive architecture diagram (Archify showcase):
-
-**[Open](docs/archify/pa-intake-architecture.html)** `docs/archify/pa-intake-architecture.html`
+## Quick start
 
 ```bash
-# from repo root
-open docs/archify/pa-intake-architecture.html   # macOS
-# or: xdg-open docs/archify/pa-intake-architecture.html
-```
-
-The diagram covers:
-
-
-| Layer         | What it shows                                                                                                           |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Presentation  | Streamlit UI (`app.py`) — fixture load, unmet-field edit, re-score, markdown export                                     |
-| Orchestration | LangGraph 10-node PA pipeline (policy → extract → quote verify → critic → draft → score → alternative → gate → persist) |
-| LLM           | OpenRouter Haiku/Sonnet via `ChatOpenAI` (mock extract for offline tests)                                               |
-| Data          | In-memory seed store + optional Supabase (`sql/`)                                                                       |
-| Fixtures      | Golden A / B / C paths and gate outcomes                                                                                |
-
-
-Machine-readable source: `[docs/archify/pa-intake.architecture.json](docs/archify/pa-intake.architecture.json)`.
-
-## Blocks
-
-
-| Block                         | Status   |
-| ----------------------------- | -------- |
-| 1 Setup + fixtures            | done     |
-| 2 Graph skeleton              | done     |
-| 3 Extraction + quote verify   | done     |
-| 4 Critic                      | done     |
-| 5 Draft + score + alternative | done     |
-| 6 Gate + persistence          | done     |
-| 7 UI                          | done     |
-| 8 Break-it + demo             | **done** |
-
-
-
-
-## Setup
-
-```bash
-python3.13 -m venv .venv
+# 1. Python env
+python3.13 -m venv .venv          # 3.12+ also fine
 source .venv/bin/activate
 pip install -r requirements.txt
+
+# 2. Env file
 cp .env.example .env
-# put your OpenRouter key in .env
-# put SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in .env (optional but recommended)
-```
+# Edit .env — at minimum set OPENROUTER_API_KEY (see Demo reproduction below)
 
-### Supabase (persistence + live policy lookup)
+# 3. Optional Supabase (persistence); skip to use in-memory seeds only
+#    Paste sql/setup.sql in Supabase SQL Editor, then:
+python scripts/ping_supabase.py
 
-1. In [Supabase Dashboard](https://supabase.com/dashboard) → your project → **SQL Editor**, paste and run [`sql/setup.sql`](sql/setup.sql) (schema + seed in one shot).
-2. Confirm from the repo:
-
-```bash
-python scripts/ping_supabase.py          # should print ok: true
-# if tables exist but are empty:
-python scripts/ping_supabase.py --seed
-```
-
-When configured, the agent:
-
-- resolves payer/drug aliases and policies from Supabase (falls back to in-memory seeds if unreachable)
-- upserts every case into `pa_cases`
-- shows connection status in the Streamlit sidebar
-
-Without Supabase credentials, everything still runs against the in-memory seed store.
-
-## Block 1 checks
-
-```bash
-# unit smoke (no API key required)
-pytest tests/test_block1_fixtures.py -q
-
-# one OpenRouter ping before wiring nodes
+# 4. Smoke + UI
 python scripts/ping_openrouter.py
+.venv/bin/streamlit run app.py
+# → http://localhost:8501
 ```
 
-
-
-## Block 2 checks
+Offline tests (no API spend):
 
 ```bash
-pytest tests/test_block2_graph.py -q
-# Fixture A → no_pa_required; unknown policy → needs_review
+pytest -q
 ```
 
+---
 
+## Tech stack & architecture
 
-## Block 3 checks
+| Layer | Tech |
+| ----- | ---- |
+| UI | Streamlit (`app.py`) |
+| Orchestration | LangGraph 10-node graph (`src/pa_agent/graph/`) |
+| LLMs | OpenRouter only — Claude Haiku (extract), Claude Sonnet (critic); no Anthropic SDK |
+| Data | In-memory seed store + optional Supabase (`sql/`) |
+| Config | `.env` / `python-dotenv` |
+
+### Simple architecture
+
+```mermaid
+flowchart LR
+  UI[Streamlit UI] --> G[LangGraph]
+  G --> P[Policy / aliases]
+  G --> E[Haiku extract fan-out]
+  E --> Q[Quote span check]
+  Q --> C[Sonnet critic]
+  C --> D[Draft + likelihood + gate]
+  D --> DB[(Supabase pa_cases / memory)]
+  P --> DB
+```
+
+**Interactive diagram:** [docs/archify/pa-intake-architecture.html](docs/archify/pa-intake-architecture.html)
 
 ```bash
-pytest tests/test_block3_extract_quote.py -q
-# Fixture B → all quotes verified / auto_completed
-# Fixture C → hallucinated quote confidence 0; missing c3,c4
+open docs/archify/pa-intake-architecture.html   # macOS
 ```
 
+| Pipeline stage | Role |
+| -------------- | ---- |
+| Intake → coverage | Alias normalize; policy lookup; early exit if no PA / unknown policy |
+| Extract → quote verify | Parallel Haiku; **deterministic** substring check zeros invented quotes |
+| Critic → draft → score | One Sonnet batch; verified-quotes-only justification; math likelihood |
+| Alternative → gate → finalize | Formulary alt if likelihood &lt; 0.55; escalate unmet field IDs; upsert + markdown export |
 
+Machine-readable diagram source: [docs/archify/pa-intake.architecture.json](docs/archify/pa-intake.architecture.json).
 
-## Block 4 checks
+---
+
+## How to reproduce the demo
+
+### 1. Environment variables & sample `.env`
+
+Copy the template and fill secrets:
 
 ```bash
-pytest tests/test_block4_critic.py -q
-# critic_note per field; cannot raise failed quote-verify; downgrade can flip gate
+cp .env.example .env
 ```
 
-
-
-## Block 5 checks
+Minimal **live demo** `.env`:
 
 ```bash
-pytest tests/test_block5_draft_score.py -q
-# Fixture B → draft + likelihood ≥ 0.75; Fixture C → alt etanercept, likelihood ~0.3–0.5
+# Required for live LLM calls
+OPENROUTER_API_KEY=sk-or-v1-your-key-here
+
+# 0 = live OpenRouter; 1 = offline mocks (pytest forces mock)
+USE_MOCK_EXTRACT=0
+
+# Keep off unless rehearsing talk-track #2 (hallucinated quote)
+INJECT_FIXTURE_C_HALLUCINATION=0
+
+# Optional — case persistence + live reference tables
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+OPENROUTER_HTTP_REFERER=http://localhost:8501
+OPENROUTER_APP_TITLE=FieldCheck-Prior-Authorization
 ```
 
+Full commented template: [`.env.example`](.env.example).
 
+| Variable | Required? | Purpose |
+| -------- | --------- | ------- |
+| `OPENROUTER_API_KEY` | Yes for live | OpenRouter key ([openrouter.ai](https://openrouter.ai)) — Cursor credits do **not** pay these calls |
+| `USE_MOCK_EXTRACT` | No (default mock-on in code if unset carefully) | `0` live / `1` mock |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | No | Persistence; omit → in-memory seeds |
+| `INJECT_FIXTURE_C_HALLUCINATION` | No | Demo-only fake c3 quote in live mode |
+| `LATENCY_LOG` | No | Per-node timings |
 
-## Block 6 checks
+**Keys:** get OpenRouter from the OpenRouter dashboard. Supabase **service role / secret** from Project Settings → API Keys (not the publishable/anon key).
+
+### 2. Demo run (UI — recommended)
 
 ```bash
-pytest tests/test_block6_gate_persist.py -q
-python scripts/run_golden.py
-# gate escalates fields; pa_cases upsert; export markdown paste-ready
+source .venv/bin/activate
+.venv/bin/streamlit run app.py
 ```
 
+In the sidebar, load fixtures in order **Needs review → No PA → Auto completed** (C → A → B), then **Run FieldCheck** each time.
 
-
-## Block 7 — UI
+### 3. Demo run (CLI talk track)
 
 ```bash
-streamlit run app.py
+python scripts/demo.py --talk    # C → A → B + 90s talking points
+python scripts/breakit.py        # empty note / unknown drug — safe escalate
+python scripts/live_smoke.py     # ping + Fixture B live graph
 ```
 
-Sidebar loads golden fixtures (start demo with **fixture_c**). Met fields are read-only; unmet fields are editable; **Re-score** re-runs likelihood + gate without re-extracting.
+### 4. 90-second talk track
 
-## Live OpenRouter
-
-```bash
-# 1. Put a real key in .env
-cp .env.example .env   # if needed
-# OPENROUTER_API_KEY=sk-or-v1-...
-# USE_MOCK_EXTRACT=0
-# INJECT_FIXTURE_C_HALLUCINATION=1   # optional, talk-track #2 only
-
-python scripts/ping_openrouter.py
-python scripts/live_smoke.py      # ping + Fixture B live graph
-streamlit run app.py              # sidebar shows LIVE vs MOCK
-```
-
-Pytest always forces `USE_MOCK_EXTRACT=1` via `tests/conftest.py` so offline tests stay free.
-
-Live hardening: justification is verified-quotes-only; critic soft-fail rejects all fields; exceptions are sanitized before persist; Fixture C inject defaults **off**.
-
-## Block 8 — Break-it + demo
-
-```bash
-pytest tests/test_block8_breakit.py -q
-python scripts/breakit.py
-python scripts/demo.py --talk          # C → A → B + 90s talk track
-```
-
-Break-it covers empty note, unknown drug/payer, hallucinated quote — always `needs_review` / safe status, never crash.
-
-### 90-second talk track
-
-1. Escalate **fields**, not cases — Fixture C checklist
-2. Model cannot invent evidence — failed quote → confidence 0 in code
-3. Second model critiques, then **math** scores approval
-4. Likely deny → same-class **no-PA** alternative
+1. Escalate **fields**, not cases — Fixture C checklist  
+2. Model cannot invent evidence — failed quote → confidence 0 **in code**  
+3. Second model critiques, then **math** scores approval  
+4. Likely deny → same-class **no-PA** alternative  
 5. Paste the markdown. Stop talking.
 
+---
 
+## Datasets / synthetic data & provenance
 
-## Golden fixtures
+All clinical content is **synthetic**, authored for this hackathon. **No real PHI, no patient records, no scraped EHR data.**
 
+| Asset | Location | Provenance |
+| ----- | -------- | ---------- |
+| Golden fixtures A/B/C | [`fixtures/`](fixtures/) | Hand-written JSON: intake fields, clinical notes, expected status, mock extract/critic maps. Spec: `PA-Intake-hackathon-spec-v2.md` §9 |
+| Payer / drug aliases | [`sql/seed.sql`](sql/seed.sql), [`src/pa_agent/data/seed_store.py`](src/pa_agent/data/seed_store.py) | Synthetic alias maps (e.g. UHC→UnitedHealthcare, Humira→adalimumab) |
+| Payer policies (8 rows) | same | Invented PA criteria + weights for demo drugs/diagnoses (UHC adalimumab RA, Aetna semaglutide, etc.) |
+| Formulary alternatives | same | Synthetic same-class swaps (e.g. adalimumab → etanercept, no PA) |
+| Schema | [`sql/schema.sql`](sql/schema.sql) / [`sql/setup.sql`](sql/setup.sql) | Hackathon Postgres/Supabase DDL |
 
-| Fixture                                  | Expect                                                     |
-| ---------------------------------------- | ---------------------------------------------------------- |
-| `fixtures/fixture_a_no_pa.json`          | `no_pa_required`                                           |
-| `fixtures/fixture_b_auto_completed.json` | `auto_completed`, likelihood ≥ 0.75                        |
-| `fixtures/fixture_c_needs_review.json`   | `needs_review`, 2 missing fields, alternative `etanercept` |
+| Fixture | Expected outcome |
+| ------- | ---------------- |
+| `fixture_a_no_pa.json` | `no_pa_required` |
+| `fixture_b_auto_completed.json` | `auto_completed`, likelihood ≥ 0.75 |
+| `fixture_c_needs_review.json` | `needs_review`, missing c3/c4, alternative etanercept |
 
+UI banner and exports state: **Demo data — not real PHI.**
 
+---
+
+## Known limitations & next steps
+
+### Known limitations
+
+- **Synthetic-only** — not validated on real payer policies or charts; do not use in production clinical workflows.
+- **OpenRouter dependency** — live path needs network + spend; provider routing can vary for the same Claude slug.
+- **Small policy set** — ~8 seeded policies / few payers; unknown drug/payer correctly escalates but is not a full formulary engine.
+- **No auth / RLS theater** — Streamlit + service-role Supabase is demo-grade, not multi-tenant secure.
+- **Qty/duration LLM off by default** — draft narrative is verified-quotes-only; optional Sonnet meta via `USE_DRAFT_META_LLM=1`.
+- **Latency** — live Haiku fan-out + Sonnet critic still dominate wall clock (mitigated with caches and critic short-circuits).
+- **Quote check is substring-based** — strong against invention, weaker on paraphrase/OCR noise.
+
+### Next steps
+
+- Expand policy/formulary coverage and payer-specific templates.
+- Human-in-the-loop audit log and role-based access (replace service-role-in-UI pattern).
+- Stronger quote grounding (fuzzy/span alignment) while keeping fail-closed invent checks.
+- Eval harness on held-out synthetic + de-identified notes; calibration of likelihood blend.
+- Deploy Streamlit/API behind proper secrets management; RLS on `pa_cases`.
+- Optional: batch extract mode / cheaper critic for latency SLAs.
+
+---
+
+## Extra reference
+
+```bash
+pytest -q                          # all blocks, mocked LLMs
+python scripts/run_golden.py       # golden A/B/C statuses
+python scripts/ping_supabase.py    # DB health
+```
+
+Build status: Blocks 1–8 complete per `PA-Intake-hackathon-spec-v2.md`.

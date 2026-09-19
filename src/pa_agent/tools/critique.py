@@ -1,13 +1,19 @@
-"""critique_all — one batched Sonnet call over all extractions (spec §2.5)."""
+"""critique_all — one batched Sonnet call over fields that still need judgment."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
+from functools import lru_cache
 from typing import Any, Literal, Optional, TypedDict
+
+from pydantic import BaseModel, Field
 
 from pa_agent.config import get_settings
 from pa_agent.criteria import is_criterion_met
 from pa_agent.state import CriterionResult
+
+_log = logging.getLogger("pa_agent.critique")
 
 CriticAction = Literal["confirm", "downgrade", "reject"]
 
@@ -19,8 +25,25 @@ class CriticDecision(TypedDict):
     reason: str
 
 
-# Optional per-criterion mock overrides for tests/fixtures
+class _Item(BaseModel):
+    criterion_id: str
+    action: Literal["confirm", "downgrade", "reject"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str
+
+
+class _Batch(BaseModel):
+    decisions: list[_Item]
+
+
 _MOCK_DECISIONS: dict[str, CriticDecision] = {}
+
+_CRITIC_SYSTEM = (
+    "Prior-auth extraction critic. For each field choose confirm|downgrade|reject, "
+    "confidence 0-1, short reason. May lower confidence only; never invent evidence. "
+    "Never raise confidence above the extractor. Quote span already verified in code — "
+    "judge whether value is supported by the quote."
+)
 
 
 def configure_mock_critic(mapping: dict[str, CriticDecision]) -> None:
@@ -30,6 +53,13 @@ def configure_mock_critic(mapping: dict[str, CriticDecision]) -> None:
 
 def clear_mock_critic() -> None:
     _MOCK_DECISIONS.clear()
+
+
+@lru_cache(maxsize=1)
+def _critic_chain():
+    from pa_agent.llm import get_critic_llm, structured
+
+    return structured(get_critic_llm(), _Batch)
 
 
 def _default_mock_decisions(
@@ -77,6 +107,38 @@ def _default_mock_decisions(
     return decisions
 
 
+def _deterministic_reject(ext: CriterionResult) -> CriticDecision | None:
+    """Fields the model must reject — skip Sonnet for these."""
+    cid = str(ext["criterion_id"])
+    if not ext.get("quote_verified"):
+        reason = (
+            "Reject: quote failed deterministic span check (pre-critic)."
+            if ext.get("quote")
+            else "Reject: no supporting quote extracted (pre-critic)."
+        )
+        return {
+            "criterion_id": cid,
+            "action": "reject",
+            "confidence": 0.0,
+            "reason": reason,
+        }
+    if not (ext.get("value") and str(ext["value"]).strip()):
+        return {
+            "criterion_id": cid,
+            "action": "reject",
+            "confidence": 0.0,
+            "reason": "Reject: empty value (pre-critic).",
+        }
+    return None
+
+
+def fields_needing_llm_critique(
+    extractions: list[CriterionResult],
+) -> list[CriterionResult]:
+    """Only quote-verified fields with a value need a Sonnet judgment."""
+    return [e for e in extractions if _deterministic_reject(e) is None]
+
+
 def apply_critic_decisions(
     extractions: list[CriterionResult],
     decisions: list[CriticDecision],
@@ -92,7 +154,6 @@ def apply_critic_decisions(
 
         if decision is None:
             ext["critic_note"] = "No critic decision returned for this field."
-            # Soft miss: do not raise confidence
             ext["met"] = is_criterion_met(
                 value=ext.get("value"),
                 quote_verified=bool(ext.get("quote_verified")),
@@ -107,7 +168,6 @@ def apply_critic_decisions(
         ext["critic_note"] = f"{action}: {reason}"
 
         if not ext.get("quote_verified"):
-            # Hard rule: failed span check stays at 0; critic cannot raise
             ext["confidence"] = 0.0
         elif action == "reject":
             ext["confidence"] = 0.0
@@ -128,7 +188,7 @@ def apply_critic_decisions(
 async def critique_all(
     extractions: list[CriterionResult], note: str
 ) -> list[CriticDecision]:
-    """One call over all fields. Mock when USE_MOCK_EXTRACT=1."""
+    """One call over fields that still need judgment. Mock when USE_MOCK_EXTRACT=1."""
     settings = get_settings()
     if settings.use_mock_llm:
         return _default_mock_decisions(extractions)
@@ -138,18 +198,23 @@ async def critique_all(
 async def _live_critique(
     extractions: list[CriterionResult], note: str
 ) -> list[CriticDecision]:
-    from pydantic import BaseModel, Field
+    """Skip Sonnet for deterministic rejects; shrink prompt (no full note)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
 
-    from pa_agent.llm import get_critic_llm, structured
+    from pa_agent.errors import sanitize_exc
 
-    class _Item(BaseModel):
-        criterion_id: str
-        action: Literal["confirm", "downgrade", "reject"]
-        confidence: float = Field(ge=0.0, le=1.0)
-        reason: str
+    decisions: list[CriticDecision] = []
+    needs_llm: list[CriterionResult] = []
+    for ext in extractions:
+        det = _deterministic_reject(ext)
+        if det is not None:
+            decisions.append(det)
+        else:
+            needs_llm.append(ext)
 
-    class _Batch(BaseModel):
-        decisions: list[_Item]
+    if not needs_llm:
+        _log.info("critic skipped LLM — all %d fields deterministic reject", len(decisions))
+        return decisions
 
     payload = [
         {
@@ -157,59 +222,54 @@ async def _live_critique(
             "criterion_text": e.get("criterion_text"),
             "value": e.get("value"),
             "quote": e.get("quote"),
-            "quote_verified": e.get("quote_verified"),
             "confidence": e.get("confidence"),
         }
-        for e in extractions
+        for e in needs_llm
     ]
-    prompt = (
-        "You are a prior-auth extraction critic. For EACH criterion, choose "
-        "confirm | downgrade | reject and set a confidence 0-1 with a short reason.\n"
-        "Rules:\n"
-        "- If quote_verified is false, you MUST reject with confidence 0.\n"
-        "- You may lower confidence; never invent evidence not in the note.\n"
-        "- Never raise confidence above the extractor's value.\n"
-        "- Return one decision per criterion_id.\n\n"
-        f"Extractions JSON:\n{payload}\n\n"
-        f"Clinical note:\n{note}"
-    )
+    # Quote already span-checked — sending full note again is mostly wasted tokens.
+    messages = [
+        SystemMessage(content=_CRITIC_SYSTEM),
+        HumanMessage(
+            content=(
+                f"Critique {len(payload)} field(s). Return one decision each.\n"
+                f"Fields JSON:\n{payload}"
+            )
+        ),
+    ]
 
     last_exc: Optional[Exception] = None
-    llm = structured(get_critic_llm(), _Batch)
+    chain = _critic_chain()
     for _ in range(2):
         try:
-            # Sync invoke — avoids event-loop conflicts after extract's asyncio.run
-            out: _Batch = llm.invoke(prompt)
-            return [
-                {
-                    "criterion_id": d.criterion_id,
-                    "action": d.action,
-                    "confidence": float(d.confidence),
-                    "reason": d.reason,
-                }
-                for d in out.decisions
-            ]
+            out: _Batch = await chain.ainvoke(messages)
+            for d in out.decisions:
+                decisions.append(
+                    {
+                        "criterion_id": d.criterion_id,
+                        "action": d.action,
+                        "confidence": float(d.confidence),
+                        "reason": d.reason,
+                    }
+                )
+            return decisions
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(0.2)
 
-    import logging
-
-    from pa_agent.errors import sanitize_exc
-
-    logging.getLogger("pa_agent.critique").warning(
+    _log.warning(
         "live critic failed: %s", sanitize_exc(last_exc) if last_exc else "unknown"
     )
-    # Fail closed: reject all fields so gate escalates to needs_review
-    return [
-        {
-            "criterion_id": str(e["criterion_id"]),
-            "action": "reject",
-            "confidence": 0.0,
-            "reason": "Critic unavailable (timeout/schema); fail closed → review.",
-        }
-        for e in extractions
-    ]
+    # Fail closed for fields that still needed LLM
+    for e in needs_llm:
+        decisions.append(
+            {
+                "criterion_id": str(e["criterion_id"]),
+                "action": "reject",
+                "confidence": 0.0,
+                "reason": "Critic unavailable (timeout/schema); fail closed → review.",
+            }
+        )
+    return decisions
 
 
 def critique_all_sync(

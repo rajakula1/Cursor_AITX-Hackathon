@@ -33,13 +33,13 @@ class Settings:
     openrouter_api_key: str
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_http_referer: str = "http://localhost:8501"
-    openrouter_app_title: str = "PA-Intake-Hackathon"
+    openrouter_app_title: str = "FieldCheck-Prior-Authorization"
     extract_model: str = "anthropic/claude-haiku-4.5"
     critic_model: str = "anthropic/claude-sonnet-4.5"
     supabase_url: str | None = None
     supabase_key: str | None = None
     llm_timeout_s: float = 60.0
-    llm_max_retries: int = 1
+    llm_max_retries: int = 0
     # When True: extract/critic/draft use fixtures/heuristic mocks (offline tests)
     use_mock_llm: bool = True
     # Demo-only: inject Fixture C hallucinated c3 (default OFF — enable for talk track)
@@ -60,7 +60,7 @@ def get_settings() -> Settings:
             "OPENROUTER_HTTP_REFERER", "http://localhost:8501"
         ),
         openrouter_app_title=os.environ.get(
-            "OPENROUTER_APP_TITLE", "PA-Intake-Hackathon"
+            "OPENROUTER_APP_TITLE", "FieldCheck-Prior-Authorization"
         ),
         extract_model=os.environ.get(
             "OPENROUTER_EXTRACT_MODEL", "anthropic/claude-haiku-4.5"
@@ -71,6 +71,7 @@ def get_settings() -> Settings:
         supabase_url=os.environ.get("SUPABASE_URL") or None,
         supabase_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or None,
         llm_timeout_s=float(os.environ.get("LLM_TIMEOUT_S", "60")),
+        llm_max_retries=int(os.environ.get("LLM_MAX_RETRIES", "0")),
         use_mock_llm=use_mock,
         inject_fixture_c_hallucination=_env_flag(
             "INJECT_FIXTURE_C_HALLUCINATION", default=False

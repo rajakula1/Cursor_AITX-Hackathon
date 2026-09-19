@@ -1,7 +1,7 @@
 [project]
 name = "pa-intake-agent"
 version = "0.1.0"
-description = "PA Intake & Auto-Draft Agent — AITX Hackathon"
+description = "FieldCheck Prior Authorization — AITX Hackathon"
 requires-python = ">=3.12"
 dependencies = []
 

@@ -141,6 +141,63 @@ def test_fixture_c_critic_rejects_failed_quote_and_missing():
     assert set(result["missing_fields"]) == {"c3", "c4"}
 
 
+def test_fields_needing_llm_skips_failed_quotes():
+    from pa_agent.tools.critique import fields_needing_llm_critique
+
+    extractions: list[CriterionResult] = [
+        {
+            "criterion_id": "c1",
+            "criterion_text": "RA",
+            "value": "yes",
+            "quote": "documented RA",
+            "quote_verified": True,
+            "confidence": 0.9,
+            "met": True,
+            "critic_note": "",
+        },
+        {
+            "criterion_id": "c3",
+            "criterion_text": "TB",
+            "value": "neg",
+            "quote": "fake",
+            "quote_verified": False,
+            "confidence": 0.0,
+            "met": False,
+            "critic_note": "",
+        },
+    ]
+    need = fields_needing_llm_critique(extractions)
+    assert len(need) == 1
+    assert need[0]["criterion_id"] == "c1"
+
+
+def test_live_critique_skips_sonnet_when_all_deterministic():
+    """All quote-failed → no Sonnet call."""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    from pa_agent.tools.critique import _live_critique
+
+    extractions: list[CriterionResult] = [
+        {
+            "criterion_id": "c3",
+            "criterion_text": "TB",
+            "value": "x",
+            "quote": "nope",
+            "quote_verified": False,
+            "confidence": 0.0,
+            "met": False,
+            "critic_note": "",
+        }
+    ]
+    chain = MagicMock()
+    with patch("pa_agent.tools.critique._critic_chain", return_value=chain):
+        decisions = asyncio.run(_live_critique(extractions, "note text"))
+    chain.ainvoke.assert_not_called()
+    assert decisions[0]["action"] == "reject"
+    assert "pre-critic" in decisions[0]["reason"]
+
+
 def test_configured_mock_critic_downgrade_flips_fixture_b_to_review():
     """If critic downgrades one field below 0.70, gate escalates that field."""
     fx = load_fixture("fixture_b_auto_completed")
