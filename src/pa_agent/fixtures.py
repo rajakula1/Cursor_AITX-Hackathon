@@ -1,4 +1,4 @@
-"""Load golden fixtures and apply mock extraction maps."""
+"""Load golden fixtures and apply mock extraction / critic maps."""
 
 from __future__ import annotations
 
@@ -6,7 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pa_agent.tools.extract import ExtractionOut, configure_mock_extractions, clear_extract_cache
+from pa_agent.tools.critique import (
+    CriticDecision,
+    clear_mock_critic,
+    configure_mock_critic,
+)
+from pa_agent.tools.extract import (
+    ExtractionOut,
+    clear_extract_cache,
+    configure_mock_extractions,
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures"
 
@@ -24,8 +33,10 @@ def list_fixtures() -> list[Path]:
 
 
 def apply_fixture_mocks(fixture: dict[str, Any]) -> None:
-    """Install mock extract outputs for this fixture and clear LLM cache."""
+    """Install mock extract (+ optional critic) outputs; clear LLM cache."""
     clear_extract_cache()
+    clear_mock_critic()
+
     raw = fixture.get("mock_extractions") or {}
     mapping: dict[str, ExtractionOut] = {}
     for cid, payload in raw.items():
@@ -35,3 +46,15 @@ def apply_fixture_mocks(fixture: dict[str, Any]) -> None:
             "quote": payload.get("quote"),
         }
     configure_mock_extractions(mapping)
+
+    critic_raw = fixture.get("mock_critic") or {}
+    if critic_raw:
+        decisions: dict[str, CriticDecision] = {}
+        for cid, payload in critic_raw.items():
+            decisions[cid] = {
+                "criterion_id": cid,
+                "action": payload["action"],
+                "confidence": float(payload.get("confidence") or 0.0),
+                "reason": str(payload.get("reason") or ""),
+            }
+        configure_mock_critic(decisions)

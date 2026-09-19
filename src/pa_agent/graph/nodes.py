@@ -1,12 +1,14 @@
-"""LangGraph nodes — Block 2: intake/coverage/finalize real; LLM path stubbed."""
+"""LangGraph nodes — extract + quote verify live; critic/draft/score still stubbed."""
 
 from __future__ import annotations
 
 import uuid
 from typing import Any
 
+from pa_agent.criteria import is_criterion_met, quote_in_note
 from pa_agent.graph.helpers import append_error
-from pa_agent.state import PAState
+from pa_agent.state import CriterionResult, PAState
+from pa_agent.tools.extract import extract_all
 from pa_agent.tools.formulary import get_formulary_alternative
 from pa_agent.tools.policy import get_payer_policy
 from pa_agent.tools.save_case import save_case
@@ -118,25 +120,76 @@ def coverage_check_node(state: PAState) -> dict[str, Any]:
 
 
 def justification_extraction_node(state: PAState) -> dict[str, Any]:
-    """Stub (Block 2). Real Haiku fan-out in Block 3."""
+    """OpenRouter Haiku fan-out per criterion; cache by (note_hash, criterion_id)."""
     try:
-        return {"extractions": list(state.get("extractions") or [])}
+        import asyncio
+
+        criteria = list(state.get("policy_criteria") or [])
+        note = state.get("clinical_note") or ""
+        pairs = asyncio.run(extract_all(criteria, note))
+
+        extractions: list[CriterionResult] = []
+        for criterion, out in pairs:
+            value = out.get("value")
+            quote = out.get("quote")
+            confidence = float(out.get("confidence") or 0.0)
+            extractions.append(
+                {
+                    "criterion_id": str(criterion["id"]),
+                    "criterion_text": str(criterion.get("text") or ""),
+                    "value": value,
+                    "quote": quote,
+                    "quote_verified": False,  # set by quote_verify_node
+                    "confidence": confidence,
+                    "met": False,
+                    "critic_note": "",
+                }
+            )
+        return {"extractions": extractions}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "justification_extraction_node", exc)
 
 
 def quote_verify_node(state: PAState) -> dict[str, Any]:
-    """Stub (Block 2). Deterministic span check in Block 3."""
+    """Deterministic: quote_verified = normalized(quote) in normalized(note).
+
+    Failed span → confidence = 0; value kept; met cannot become true.
+    """
     try:
-        return {}
+        note = state.get("clinical_note") or ""
+        updated: list[CriterionResult] = []
+        for raw in state.get("extractions") or []:
+            ext: CriterionResult = dict(raw)  # type: ignore[assignment]
+            verified = quote_in_note(ext.get("quote"), note)
+            ext["quote_verified"] = verified
+            if not verified:
+                ext["confidence"] = 0.0
+            ext["met"] = is_criterion_met(
+                value=ext.get("value"),
+                quote_verified=ext["quote_verified"],
+                confidence=float(ext.get("confidence") or 0.0),
+            )
+            updated.append(ext)
+        return {"extractions": updated}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "quote_verify_node", exc)
 
 
 def critic_node(state: PAState) -> dict[str, Any]:
-    """Stub (Block 2). Batched Sonnet critic in Block 4."""
+    """One batched Sonnet critic over all extractions. May lower confidence only."""
     try:
-        return {}
+        import asyncio
+
+        from pa_agent.tools.critique import apply_critic_decisions, critique_all
+
+        extractions = list(state.get("extractions") or [])
+        if not extractions:
+            return {"extractions": []}
+
+        note = state.get("clinical_note") or ""
+        decisions = asyncio.run(critique_all(extractions, note))  # type: ignore[arg-type]
+        updated = apply_critic_decisions(extractions, decisions)  # type: ignore[arg-type]
+        return {"extractions": updated}
     except Exception as exc:  # noqa: BLE001
         return append_error(state, "critic_node", exc)
 
@@ -178,18 +231,35 @@ def alternative_suggestion_node(state: PAState) -> dict[str, Any]:
 
 
 def confidence_gate_node(state: PAState) -> dict[str, Any]:
-    """Deterministic gate: all required criteria met → auto_completed."""
+    """Deterministic gate using shared `is_criterion_met` (spec §2.4)."""
     try:
         criteria = state.get("policy_criteria") or []
         extractions = state.get("extractions") or []
         by_id = {e.get("criterion_id"): e for e in extractions}
 
         missing: list[str] = []
+        refreshed: list[CriterionResult] = []
         for c in criteria:
             cid = c["id"]
             ext = by_id.get(cid)
-            if not ext or not ext.get("met"):
+            if not ext:
                 missing.append(cid)
+                continue
+            row: CriterionResult = dict(ext)  # type: ignore[assignment]
+            row["met"] = is_criterion_met(
+                value=row.get("value"),
+                quote_verified=bool(row.get("quote_verified")),
+                confidence=float(row.get("confidence") or 0.0),
+            )
+            refreshed.append(row)
+            if not row["met"]:
+                missing.append(cid)
+
+        # Keep any extractions not in policy_criteria (shouldn't happen)
+        seen = {r["criterion_id"] for r in refreshed}
+        for ext in extractions:
+            if ext.get("criterion_id") not in seen:
+                refreshed.append(dict(ext))  # type: ignore[arg-type]
 
         if criteria and not missing:
             status = "auto_completed"
@@ -203,6 +273,7 @@ def confidence_gate_node(state: PAState) -> dict[str, Any]:
             )
 
         return {
+            "extractions": refreshed,
             "missing_fields": missing,
             "status": status,
             "human_review_notes": notes or state.get("human_review_notes"),

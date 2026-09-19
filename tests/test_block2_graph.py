@@ -71,15 +71,16 @@ def test_empty_note_needs_review_no_crash():
     assert "clinical_note is empty" in (result.get("human_review_notes") or "")
 
 
-def test_pa_required_path_reaches_finalize_via_stubs():
-    """With stubs, PA-required cases land in needs_review (nothing met yet)."""
-    fx = load_fixture("fixture_b_auto_completed")
-    inp = fx["input"]
+def test_pa_required_unsupported_note_needs_review():
+    """PA-required with a note that supports no criteria → all fields missing."""
     result = run_case(
-        drug_name=inp["drug_name"],
-        diagnosis_code=inp["diagnosis_code"],
-        payer_name=inp["payer_name"],
-        clinical_note=inp["clinical_note"],
+        drug_name="Humira",
+        diagnosis_code="M06.9",
+        payer_name="UHC",
+        clinical_note=(
+            "Demo data — not real PHI. Patient visited clinic for a medication "
+            "refill discussion only. Labs deferred. No specialist notes on file."
+        ),
     )
     assert result["policy_lookup"] == "found"
     assert result["pa_required"] is True

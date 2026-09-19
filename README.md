@@ -16,10 +16,10 @@ Hackathon build of a LangGraph prior-auth intake pipeline (spec: `PA-Intake-hack
 | Block | Status |
 | ----- | ------ |
 | 1 Setup + fixtures | done |
-| 2 Graph skeleton | **done** |
-| 3 Extraction + quote verify | next |
-| 4 Critic | |
-| 5 Draft + score + alternative | |
+| 2 Graph skeleton | done |
+| 3 Extraction + quote verify | done |
+| 4 Critic | **done** |
+| 5 Draft + score + alternative | next |
 | 6 Gate + persistence | |
 | 7 UI | |
 | 8 Break-it + demo | |
@@ -51,6 +51,21 @@ python scripts/ping_openrouter.py
 ```bash
 pytest tests/test_block2_graph.py -q
 # Fixture A → no_pa_required; unknown policy → needs_review
+```
+
+## Block 3 checks
+
+```bash
+pytest tests/test_block3_extract_quote.py -q
+# Fixture B → all quotes verified / auto_completed
+# Fixture C → hallucinated quote confidence 0; missing c3,c4
+```
+
+## Block 4 checks
+
+```bash
+pytest tests/test_block4_critic.py -q
+# critic_note per field; cannot raise failed quote-verify; downgrade can flip gate
 ```
 
 ## Golden fixtures
